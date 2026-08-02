@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<title>Pi hard-wrapped link verification</title>
+	<link rel="stylesheet" href="/node_modules/@xterm/xterm/css/xterm.css">
+	<style>
+		body { margin: 24px; background: #242632; color: #eee; font-family: sans-serif; }
+		#terminal { width: 1000px; height: 260px; }
+		#result { font-family: monospace; }
+	</style>
+</head>
+<body>
+	<h1>Pi hard-wrapped link verification</h1>
+	<div id="terminal" aria-label="Pi hard-wrapped terminal"></div>
+	<p id="result">Waiting…</p>
+	<script src="/node_modules/@xterm/xterm/lib/xterm.js"></script>
+	<script src="/media/wrapped-path-links.js"></script>
+	<script>
+		const target = "/Users/yiheng/go/src/sand-api/docs/bugfix-rewrite-rda-sql-easysql.md";
+		const terminal = new Terminal({ cols: 60, rows: 8, fontSize: 16 });
+		const provider = WrappedPathLinks.createPathLinkProvider(terminal, (_event, value, kind) => {
+			document.getElementById("result").textContent = JSON.stringify({ value, kind });
+		});
+		terminal.registerLinkProvider(provider);
+		const host = document.getElementById("terminal");
+		terminal.open(host);
+		host.addEventListener("mousemove", () => setTimeout(() => {
+			const current = terminal._core?._linkifier2?.currentLink;
+			document.body.dataset.hover = JSON.stringify(current ? {
+				text: current.link.text,
+				range: current.link.range,
+				isHovered: current.state?.isHovered,
+				underline: current.state?.decorations?.underline,
+			} : null);
+		}, 0));
+		const contentWidth = terminal.cols - 2;
+		const rows = [
+			" docs目录中的文件： ",
+			"",
+			` ${target.slice(0, contentWidth)} `,
+			` ${target.slice(contentWidth)} `,
+		];
+		terminal.write(rows.join("\r\n"), () => {
+			const checks = [];
+			for (const row of [3, 4]) {
+				provider.provideLinks(row, (links) => checks.push({
+					row,
+					links: (links ?? []).map((link) => ({ text: link.text, range: link.range })),
+				}));
+			}
+			window.hardWrapTest = { terminal, provider, target, checks };
+			document.body.dataset.checks = JSON.stringify(checks);
+			document.body.dataset.target = target;
+			document.body.dataset.ready = "true";
+		});
+	</script>
+</body>
+</html>
