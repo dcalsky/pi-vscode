@@ -3,27 +3,78 @@
 	const app = document.getElementById("app");
 	const tabs = document.getElementById("tabs");
 	const hosts = document.getElementById("terminal-hosts");
-	const historyPane = document.getElementById("history-pane");
-	const history = document.getElementById("history");
+	const emptyState = document.getElementById("empty-state");
+	const emptyNew = document.getElementById("empty-new");
+	const sidebar = document.getElementById("sidebar");
+	const sessionList = document.getElementById("session-list");
+	const search = document.getElementById("search");
 	const refresh = document.getElementById("refresh");
 	const newSession = document.getElementById("new-session");
+	const customize = document.getElementById("customize");
 	const newTab = document.getElementById("new-tab");
-	const hideHistory = document.getElementById("hide-history");
-	const showHistory = document.getElementById("show-history");
-	const contextMenu = document.getElementById("context-menu");
-	const contextHide = document.getElementById("context-hide");
+	const tabMenu = document.getElementById("tab-menu");
+	const hideSidebar = document.getElementById("hide-sidebar");
+	const showSidebar = document.getElementById("show-sidebar");
+	const menu = document.getElementById("menu");
+
 	const terminals = new Map();
+	const expandedGroups = new Set();
+	const collapsedGroups = new Set();
+	const GROUP_PREVIEW_COUNT = 6;
+	const STOP_LABEL = "Stop Pi";
 	let activeId;
 	let historySessions = [];
+
 	const statusLabels = {
 		inactive: "Not open",
 		starting: "Starting",
 		working: "Working",
 		idle: "Idle",
 	};
+	const statusIcons = {
+		inactive: "check-circle",
+		starting: "spinner",
+		working: "spinner",
+		idle: "check-circle",
+	};
+
+	const SVG_ATTRIBUTES =
+		'viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"';
+	const ICON_PATHS = {
+		plus: '<path d="M8 3.4v9.2M3.4 8h9.2"/>',
+		ellipsis:
+			'<circle cx="3.4" cy="8" r="1.05" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.05" fill="currentColor" stroke="none"/><circle cx="12.6" cy="8" r="1.05" fill="currentColor" stroke="none"/>',
+		sidebar: '<rect x="1.6" y="2.6" width="12.8" height="10.8" rx="1.6"/><path d="M10.2 2.6v10.8"/>',
+		search: '<circle cx="6.9" cy="6.9" r="4.1"/><path d="M10 10 13.6 13.6"/>',
+		archive:
+			'<rect x="1.8" y="2.8" width="12.4" height="3.1" rx="1"/><path d="M3.2 6.1v6.1a1.2 1.2 0 0 0 1.2 1.2h7.2a1.2 1.2 0 0 0 1.2-1.2V6.1"/><path d="M6.4 9h3.2"/>',
+		unarchive:
+			'<rect x="1.8" y="2.8" width="12.4" height="3.1" rx="1"/><path d="M3.2 6.1v6.1a1.2 1.2 0 0 0 1.2 1.2h7.2a1.2 1.2 0 0 0 1.2-1.2V6.1"/><path d="M8 12.1V8.1m0 0L6.4 9.7M8 8.1l1.6 1.6"/>',
+		"check-circle": '<circle cx="8" cy="8" r="5.7"/><path d="M5.6 8.2 7.2 9.8l3.2-3.6"/>',
+		spinner: '<circle cx="8" cy="8" r="5.7" stroke-opacity="0.3"/><path d="M8 2.3a5.7 5.7 0 0 1 5.7 5.7"/>',
+		sliders: '<path d="M2.6 5.2h10.8M2.6 10.8h10.8"/><circle cx="6" cy="5.2" r="1.6"/><circle cx="10.4" cy="10.8" r="1.6"/>',
+		refresh: '<path d="M13.3 8a5.3 5.3 0 1 1-1.6-3.8"/><path d="M13.5 2.7v3.2h-3.2"/>',
+		close: '<path d="M4.4 4.4 11.6 11.6M11.6 4.4 4.4 11.6"/>',
+		"chevron-down": '<path d="M4.2 6.4 8 10.1l3.8-3.7"/>',
+		"chevron-right": '<path d="M6.4 4.2 10.1 8l-3.7 3.8"/>',
+	};
+
+	function icon(name, className) {
+		const wrapper = document.createElement("span");
+		wrapper.className = className ? `icon ${className}` : "icon";
+		wrapper.setAttribute("aria-hidden", "true");
+		wrapper.innerHTML = `<svg ${SVG_ATTRIBUTES}>${ICON_PATHS[name] || ""}</svg>`;
+		return wrapper;
+	}
 
 	function color(name, fallback) {
 		return getComputedStyle(document.body).getPropertyValue(name).trim() || fallback;
+	}
+
+	// Both panes share the side bar surface so the divider between them stays readable in
+	// themes whose editor background is lighter than the side bar.
+	function paneBackground() {
+		return color("--vscode-sideBar-background", color("--vscode-editor-background", "#1e1e1e"));
 	}
 
 	let soundContext;
@@ -31,7 +82,7 @@
 	function unlockSound() {
 		const AudioContext = window.AudioContext || window.webkitAudioContext;
 		if (!AudioContext) return;
-		const context = soundContext ??= new AudioContext();
+		const context = (soundContext ??= new AudioContext());
 		if (context.state !== "running") void context.resume().catch(() => undefined);
 	}
 
@@ -69,14 +120,16 @@
 
 	function sendSize(id) {
 		const entry = terminals.get(id);
-		if (!entry) return;
+		if (!entry || entry.host.hidden) return;
 		entry.fit.fit();
 		vscode.postMessage({ type: "resize", id, cols: entry.term.cols, rows: entry.term.rows });
 	}
 
-	function openTerminal(id, title) {
+	function openTerminal(id, sessionId, title) {
 		let entry = terminals.get(id);
 		if (!entry) {
+			// xterm measures its host on open, so the pane has to be laid out first.
+			hosts.hidden = false;
 			const host = document.createElement("div");
 			host.className = "terminal-host";
 			host.hidden = true;
@@ -87,7 +140,7 @@
 				fontFamily: color("--vscode-editor-font-family", "monospace"),
 				fontSize: 13,
 				theme: {
-					background: color("--vscode-terminal-background", color("--vscode-editor-background", "#1e1e1e")),
+					background: paneBackground(),
 					foreground: color("--vscode-terminal-foreground", color("--vscode-foreground", "#cccccc")),
 					cursor: color("--vscode-terminalCursor-foreground", "#aeafad"),
 					selectionBackground: color("--vscode-terminal-selectionBackground", "#264f78"),
@@ -99,50 +152,100 @@
 			term.open(host);
 			term.onData((data) => vscode.postMessage({ type: "input", id, data }));
 			host.addEventListener("mousedown", () => term.focus());
-			entry = { host, term, fit, title, exited: false, detached: false };
+			entry = { host, term, fit, sessionId, title, detached: false };
 			terminals.set(id, entry);
 		} else {
+			entry.sessionId = sessionId;
 			entry.title = title;
-			entry.exited = false;
+			entry.detached = false;
 			entry.term.reset();
 		}
 		selectTerminal(id);
+	}
+
+	function attachedIds() {
+		return [...terminals].filter(([, entry]) => !entry.detached).map(([id]) => id);
 	}
 
 	function selectTerminal(id) {
 		const selected = terminals.get(id);
 		if (!selected) return;
 		selected.detached = false;
+		hosts.hidden = false;
 		activeId = id;
-		for (const [sessionId, entry] of terminals) entry.host.hidden = sessionId !== id;
-		renderTabs();
-		renderHistory();
-		hideContextMenu();
+		for (const [tabId, entry] of terminals) entry.host.hidden = tabId !== id;
+		vscode.postMessage({ type: "focus", id });
+		render();
 		requestAnimationFrame(() => {
 			sendSize(id);
 			terminals.get(id)?.term.focus();
 		});
 	}
 
-	function hideTerminal(id) {
+	function disposeTerminal(id) {
 		const entry = terminals.get(id);
 		if (!entry) return;
+		const index = attachedIds().indexOf(id);
+		entry.term.dispose();
+		entry.host.remove();
+		terminals.delete(id);
+		selectNeighbour(id, index);
+	}
+
+	// Closing a tab keeps Pi running so the session can be reopened from the list.
+	function closeTerminal(id) {
+		const entry = terminals.get(id);
+		if (!entry || entry.detached) return;
+		const index = attachedIds().indexOf(id);
 		entry.detached = true;
 		entry.host.hidden = true;
-		if (activeId === id) activeId = [...terminals].find(([, candidate]) => !candidate.detached)?.[0];
-		renderTabs();
-		renderHistory();
-		hideContextMenu();
-		if (activeId) selectTerminal(activeId);
+		vscode.postMessage({ type: "detach", id });
+		selectNeighbour(id, index);
+	}
+
+	function shutdownTerminal(id) {
+		if (!terminals.has(id)) return;
+		vscode.postMessage({ type: "shutdown", id });
+	}
+
+	function selectNeighbour(closedId, index) {
+		if (activeId !== closedId) {
+			render();
+			return;
+		}
+		activeId = undefined;
+		const remaining = attachedIds();
+		const next = remaining[Math.min(index, remaining.length - 1)];
+		if (next) selectTerminal(next);
+		else render();
+	}
+
+	function archiveTerminal(id) {
+		const entry = terminals.get(id);
+		if (!entry) return;
+		setArchived(entry.sessionId, true);
+	}
+
+	function setArchived(sessionId, archived) {
+		if (!sessionId) return;
+		vscode.postMessage({ type: "archive", id: sessionId, archived });
 	}
 
 	function closeActiveSessionOrView() {
 		const active = activeId && terminals.get(activeId);
 		if (active && !active.detached) {
-			hideTerminal(activeId);
+			closeTerminal(activeId);
 			return;
 		}
 		vscode.postMessage({ type: "close-view" });
+	}
+
+	function render() {
+		renderTabs();
+		renderSessions();
+		const open = attachedIds().length;
+		emptyState.hidden = open > 0;
+		hosts.hidden = open === 0;
 	}
 
 	function renderTabs() {
@@ -150,10 +253,10 @@
 		for (const [id, entry] of terminals) {
 			if (entry.detached) continue;
 			const tab = document.createElement("div");
-			tab.className = `tab${id === activeId ? " active" : ""}${entry.exited ? " exited" : ""}`;
+			tab.className = `tab${id === activeId ? " active" : ""}`;
 			tab.addEventListener("contextmenu", (event) => {
 				event.preventDefault();
-				showContextMenu(id, event.clientX, event.clientY);
+				showMenu(tabMenuItems(id), event.clientX, event.clientY);
 			});
 
 			const select = document.createElement("button");
@@ -167,90 +270,194 @@
 			const close = document.createElement("button");
 			close.type = "button";
 			close.className = "tab-close";
-			close.textContent = "×";
-			close.title = `Hide ${entry.title}; Pi keeps running`;
-			close.setAttribute("aria-label", `Hide ${entry.title}; Pi keeps running`);
-			close.addEventListener("click", () => hideTerminal(id));
+			close.title = `Close ${entry.title} (Pi keeps running)`;
+			close.setAttribute("aria-label", close.title);
+			close.append(icon("close"));
+			close.addEventListener("click", (event) => {
+				event.stopPropagation();
+				closeTerminal(id);
+			});
 
 			tab.append(select, close);
 			tabs.append(tab);
 		}
 	}
 
-	function renderHistory(sessions) {
-		if (sessions) historySessions = sessions;
-		history.replaceChildren();
-		if (!historySessions.length) {
-			const empty = document.createElement("p");
-			empty.className = "empty";
-			empty.textContent = "No saved sessions.";
-			history.append(empty);
-			return;
-		}
-
-		const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-		const recent = historySessions.filter((session) => session.createdAtMs >= cutoff);
-		const older = historySessions.filter((session) => session.createdAtMs < cutoff);
-		appendHistoryGroup("Last 30 days", recent);
-		appendHistoryGroup("Older", older);
+	function tabMenuItems(id) {
+		return [
+			{ label: "Close", hint: "Close this tab; Pi keeps running", run: () => closeTerminal(id) },
+			{ label: STOP_LABEL, hint: "Stop the Pi process and close this tab", run: () => shutdownTerminal(id) },
+			{ label: "Archive", hint: "File this session under Archive", run: () => archiveTerminal(id) },
+		];
 	}
 
-	function appendHistoryGroup(title, sessions) {
-		if (!sessions.length) return;
-		const group = document.createElement("section");
-		group.className = "history-group";
-		const heading = document.createElement("h2");
-		heading.textContent = title;
-		group.append(heading);
-		for (const session of sessions) {
-			const button = document.createElement("button");
-			const selected = activeId !== undefined && session.tabId === activeId;
-			const state = normalizedState(session.state);
-			button.type = "button";
-			button.className = `history-session${selected ? " active" : ""}`;
-			button.title = `${statusLabels[state]} — ${session.title}`;
-			button.setAttribute("aria-label", `${statusLabels[state]}: ${session.title}`);
-			button.setAttribute("aria-pressed", String(selected));
-
-			const icon = document.createElement("span");
-			icon.className = `session-status ${state}`;
-			icon.setAttribute("aria-hidden", "true");
-			const label = document.createElement("span");
-			label.className = "session-label";
-			label.textContent = session.title;
-			button.append(icon, label);
-
-			button.addEventListener("click", () => {
-				if (session.tabId) selectTerminal(session.tabId);
-				vscode.postMessage({ type: "resume", id: session.id });
-			});
-			group.append(button);
+	function renderSessions(sessions) {
+		if (sessions) historySessions = sessions;
+		sessionList.replaceChildren();
+		const groups = PiSessionView.groupSessions(historySessions, { nowMs: Date.now(), query: search.value });
+		if (!groups.length) {
+			const empty = document.createElement("p");
+			empty.className = "list-empty";
+			empty.textContent = search.value.trim() ? "No matching sessions." : "No saved sessions.";
+			sessionList.append(empty);
+			return;
 		}
-		history.append(group);
+		for (const group of groups) sessionList.append(sessionGroup(group));
+	}
+
+	function sessionGroup(group) {
+		const section = document.createElement("section");
+		section.className = "session-group";
+
+		const collapsed = collapsedGroups.has(group.title);
+		const heading = document.createElement("h2");
+		const toggle = document.createElement("button");
+		toggle.type = "button";
+		toggle.className = `group-toggle${collapsed ? " collapsed" : ""}`;
+		toggle.title = `${collapsed ? "Expand" : "Collapse"} ${group.title}`;
+		toggle.setAttribute("aria-expanded", String(!collapsed));
+		const groupTitle = document.createElement("span");
+		groupTitle.className = "group-title";
+		groupTitle.textContent = group.title;
+		toggle.append(groupTitle, icon(collapsed ? "chevron-right" : "chevron-down", "group-chevron"));
+		toggle.addEventListener("click", () => {
+			if (collapsed) collapsedGroups.delete(group.title);
+			else collapsedGroups.add(group.title);
+			renderSessions();
+		});
+		heading.append(toggle);
+		section.append(heading);
+		if (collapsed) return section;
+
+		const expanded = expandedGroups.has(group.title);
+		const visible = expanded ? group.sessions : group.sessions.slice(0, GROUP_PREVIEW_COUNT);
+		for (const session of visible) section.append(sessionRow(session));
+
+		if (group.sessions.length > GROUP_PREVIEW_COUNT) {
+			const more = document.createElement("button");
+			more.type = "button";
+			more.className = "group-more";
+			more.append(icon("ellipsis"));
+			const label = document.createElement("span");
+			label.textContent = expanded ? "Less" : "More";
+			more.append(label);
+			more.addEventListener("click", () => {
+				if (expanded) expandedGroups.delete(group.title);
+				else expandedGroups.add(group.title);
+				renderSessions();
+			});
+			section.append(more);
+		}
+		return section;
+	}
+
+	function sessionRow(session) {
+		const archived = Boolean(session.archived);
+		const state = normalizedState(session.state);
+		const selected = activeId !== undefined && session.tabId === activeId;
+		const age = PiSessionView.formatAge(PiSessionView.sessionTimestamp(session), Date.now());
+
+		const row = document.createElement("div");
+		row.className = `session-row${selected ? " active" : ""}`;
+
+		const open = document.createElement("button");
+		open.type = "button";
+		open.className = "session-open";
+		open.title = `${statusLabels[state]} — ${session.title} (${age})`;
+		open.setAttribute("aria-label", `${statusLabels[state]}: ${session.title}, ${age}`);
+		open.setAttribute("aria-pressed", String(selected));
+		const status = icon(statusIcons[state], `session-status ${state}`);
+		const label = document.createElement("span");
+		label.className = "session-label";
+		label.textContent = session.title;
+		open.append(status, label);
+		open.addEventListener("click", () => {
+			if (session.tabId) selectTerminal(session.tabId);
+			vscode.postMessage({ type: "resume", id: session.id });
+		});
+
+		const actions = document.createElement("div");
+		actions.className = "session-actions";
+		const ageLabel = document.createElement("span");
+		ageLabel.className = "session-age";
+		ageLabel.textContent = age;
+		actions.append(ageLabel);
+
+		const archive = document.createElement("button");
+		archive.type = "button";
+		archive.className = "session-action";
+		archive.title = archived ? `Restore ${session.title}` : `Archive ${session.title}`;
+		archive.setAttribute("aria-label", archive.title);
+		archive.append(icon(archived ? "unarchive" : "archive"));
+		archive.addEventListener("click", (event) => {
+			event.stopPropagation();
+			setArchived(session.id, !archived);
+		});
+		actions.append(archive);
+
+		row.append(open, actions);
+		row.addEventListener("contextmenu", (event) => {
+			event.preventDefault();
+			const entry = session.tabId ? terminals.get(session.tabId) : undefined;
+			const items = [];
+			if (entry && !entry.detached) {
+				items.push({ label: "Close", hint: "Close this tab; Pi keeps running", run: () => closeTerminal(session.tabId) });
+			}
+			// A tab id means the extension still has a live Pi process for this session.
+			if (session.tabId) {
+				items.push({
+					label: STOP_LABEL,
+					hint: "Stop the Pi process and close its tab",
+					run: () => shutdownTerminal(session.tabId),
+				});
+			}
+			items.push({
+				label: archived ? "Restore" : "Archive",
+				hint: archived ? "Move this session back to its date group" : "File this session under Archive",
+				run: () => setArchived(session.id, !archived),
+			});
+			showMenu(items, event.clientX, event.clientY);
+		});
+		return row;
 	}
 
 	function normalizedState(value) {
 		return Object.prototype.hasOwnProperty.call(statusLabels, value) ? value : "inactive";
 	}
 
-	function showContextMenu(id, x, y) {
-		contextMenu.dataset.sessionId = id;
-		contextMenu.hidden = false;
-		const { width, height } = contextMenu.getBoundingClientRect();
-		contextMenu.style.left = `${Math.min(x, window.innerWidth - width - 4)}px`;
-		contextMenu.style.top = `${Math.min(y, window.innerHeight - height - 4)}px`;
-		contextHide.focus();
+	function showMenu(items, x, y, owner) {
+		menu.replaceChildren();
+		if (owner) menu.dataset.owner = owner;
+		else delete menu.dataset.owner;
+		for (const item of items) {
+			const button = document.createElement("button");
+			button.type = "button";
+			button.setAttribute("role", "menuitem");
+			button.textContent = item.label;
+			if (item.hint) button.title = item.hint;
+			button.addEventListener("click", () => {
+				hideMenu();
+				item.run();
+			});
+			menu.append(button);
+		}
+		menu.hidden = false;
+		const { width, height } = menu.getBoundingClientRect();
+		menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - width - 4))}px`;
+		menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - height - 4))}px`;
+		menu.querySelector("button")?.focus();
 	}
 
-	function hideContextMenu() {
-		contextMenu.hidden = true;
-		delete contextMenu.dataset.sessionId;
+	function hideMenu() {
+		menu.hidden = true;
+		menu.replaceChildren();
+		delete menu.dataset.owner;
 	}
 
-	function setHistoryVisible(visible) {
-		app.classList.toggle("history-hidden", !visible);
-		historyPane.hidden = !visible;
-		showHistory.hidden = visible;
+	function setSidebarVisible(visible) {
+		app.classList.toggle("sidebar-hidden", !visible);
+		sidebar.hidden = !visible;
+		showSidebar.hidden = visible;
 		if (activeId) requestAnimationFrame(() => sendSize(activeId));
 	}
 
@@ -258,7 +465,7 @@
 		const message = event.data;
 		switch (message.type) {
 			case "session-open":
-				openTerminal(message.id, message.title);
+				openTerminal(message.id, message.sessionId, message.title);
 				break;
 			case "data":
 				terminals.get(message.id)?.term.write(message.data);
@@ -266,22 +473,15 @@
 			case "select":
 				selectTerminal(message.id);
 				break;
-			case "session-exit": {
-				const entry = terminals.get(message.id);
-				if (entry) {
-					entry.exited = true;
-					entry.term.write(`\r\n[pi exited with code ${message.exitCode}]\r\n`);
-					renderTabs();
-					renderHistory();
-				}
+			case "session-close":
+				disposeTerminal(message.id);
 				break;
-			}
-			case "session-title": {
+			case "session-meta": {
 				const entry = terminals.get(message.id);
 				if (entry) {
+					entry.sessionId = message.sessionId;
 					entry.title = message.title;
-					renderTabs();
-					renderHistory();
+					render();
 				}
 				break;
 			}
@@ -292,28 +492,67 @@
 				closeActiveSessionOrView();
 				break;
 			case "history":
-				renderHistory(message.sessions);
+				renderSessions(message.sessions);
 				break;
 		}
 	});
 
-	newSession.addEventListener("click", () => vscode.postMessage({ type: "new" }));
-	newTab.addEventListener("click", () => vscode.postMessage({ type: "new" }));
+	newTab.append(icon("plus"));
+	tabMenu.append(icon("ellipsis"));
+	showSidebar.append(icon("sidebar"));
+	hideSidebar.append(icon("sidebar"));
+	refresh.append(icon("refresh"));
+	customize.append(icon("sliders"));
+	document.querySelector(".search-icon").append(icon("search"));
+	newSession.prepend(icon("plus"));
+
+	const requestNewSession = () => vscode.postMessage({ type: "new" });
+	newSession.addEventListener("click", requestNewSession);
+	newTab.addEventListener("click", requestNewSession);
+	emptyNew.addEventListener("click", requestNewSession);
+	customize.addEventListener("click", () => vscode.postMessage({ type: "customize" }));
 	refresh.addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
-	hideHistory.addEventListener("click", () => setHistoryVisible(false));
-	showHistory.addEventListener("click", () => setHistoryVisible(true));
-	contextHide.addEventListener("click", () => {
-		const id = contextMenu.dataset.sessionId;
-		if (id) hideTerminal(id);
+	hideSidebar.addEventListener("click", () => setSidebarVisible(false));
+	showSidebar.addEventListener("click", () => setSidebarVisible(true));
+	search.addEventListener("input", () => renderSessions());
+	tabMenu.addEventListener("click", (event) => {
+		event.stopPropagation();
+		// A second click on the button closes the menu it opened.
+		if (!menu.hidden && menu.dataset.owner === "tab-menu") {
+			hideMenu();
+			return;
+		}
+		const { left, bottom } = tabMenu.getBoundingClientRect();
+		const items = [
+			{ label: "New session", run: requestNewSession },
+			{ label: "Refresh sessions", run: () => vscode.postMessage({ type: "refresh" }) },
+		];
+		if (activeId && terminals.has(activeId)) {
+			items.push({ label: "Archive session", run: () => archiveTerminal(activeId) });
+			items.push({ label: "Close session", hint: "Pi keeps running", run: () => closeTerminal(activeId) });
+			items.push({ label: `${STOP_LABEL} for this session`, run: () => shutdownTerminal(activeId) });
+		}
+		items.push({
+			label: sidebar.hidden ? "Show sessions" : "Hide sessions",
+			run: () => setSidebarVisible(sidebar.hidden),
+		});
+		showMenu(items, left, bottom + 2, "tab-menu");
 	});
+
 	document.addEventListener("pointerdown", (event) => {
 		unlockSound();
-		if (!contextMenu.hidden && !contextMenu.contains(event.target)) hideContextMenu();
+		// The toggle button is excluded so its own click can close the menu instead of
+		// closing it here and reopening it.
+		if (menu.hidden || menu.contains(event.target) || tabMenu.contains(event.target)) return;
+		hideMenu();
 	});
 	document.addEventListener("keydown", (event) => {
 		unlockSound();
-		if (event.key === "Escape") hideContextMenu();
+		if (event.key === "Escape") hideMenu();
 	});
+
 	new ResizeObserver(() => activeId && requestAnimationFrame(() => sendSize(activeId))).observe(hosts);
+	setInterval(() => renderSessions(), 60000);
+	render();
 	vscode.postMessage({ type: "ready" });
 })();

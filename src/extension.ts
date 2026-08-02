@@ -11,6 +11,7 @@ import {
 } from "./session-store";
 import { becameIdle, PiStatusBridge, type PiSessionState, type PiStatusReport } from "./status-bridge";
 import { httpUrl, resolveFileLink } from "./terminal-links";
+import { normalizeViewState, setArchived, type PiViewState } from "./view-state";
 
 interface RunningSession {
 	tabId: string;
@@ -18,6 +19,8 @@ interface RunningSession {
 	startedAtMs: number;
 	title: string;
 	path?: string;
+	/** False once its tab is closed: Pi keeps running, but the tab is not restored. */
+	attached: boolean;
 	process: pty.IPty;
 }
 
@@ -25,20 +28,26 @@ type ClientMessage =
 	| { type: "ready" }
 	| { type: "new" }
 	| { type: "close-view" }
+	| { type: "customize" }
 	| { type: "input"; id: string; data: string }
 	| { type: "resize"; id: string; cols: number; rows: number }
 	| { type: "refresh" }
 	| { type: "resume"; id: string }
+	| { type: "focus"; id: string }
+	| { type: "detach"; id: string }
+	| { type: "shutdown"; id: string }
+	| { type: "archive"; id: string; archived: boolean }
 	| { type: "open-link"; kind: "file" | "url"; target: string };
 
 const PI_VIEW_ID = "piAgent.view";
 const PI_CONTAINER_COMMAND = "workbench.view.extension.piAgent";
 const PI_CLOSE_SESSION_OR_VIEW_COMMAND = "piAgent.closeSessionOrView";
+const PI_VIEW_STATE_KEY = "piAgent.viewState";
 let ptyPrepared = false;
 let piViewProvider: PiViewProvider | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
-	const provider = new PiViewProvider(context.extensionUri);
+	const provider = new PiViewProvider(context.extensionUri, context.workspaceState);
 	piViewProvider = provider;
 	context.subscriptions.push(
 		provider,
@@ -46,6 +55,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			webviewOptions: { retainContextWhenHidden: true },
 		}),
 		vscode.commands.registerCommand("piAgent.open", () => provider.open()),
+		vscode.commands.registerCommand("piAgent.newSession", () => provider.newSession()),
 		vscode.commands.registerCommand(PI_CLOSE_SESSION_OR_VIEW_COMMAND, () => provider.closeSessionOrView()),
 	);
 }
@@ -70,7 +80,10 @@ class PiViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
 	private cwd: string | undefined;
 	private disposed = false;
 
-	constructor(private readonly extensionUri: vscode.Uri) {}
+	constructor(
+		private readonly extensionUri: vscode.Uri,
+		private readonly memento: vscode.Memento,
+	) {}
 
 	async open(): Promise<void> {
 		const folder = currentWorkspaceFolder();
@@ -87,6 +100,14 @@ class PiViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
 
 	closeSessionOrView(): void {
 		this.panel?.closeActiveSessionOrView();
+	}
+
+	async newSession(): Promise<void> {
+		if (!this.panel) {
+			await this.open();
+			return;
+		}
+		this.panel.startNewSession();
 	}
 
 	resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -118,7 +139,7 @@ class PiViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
 
 		this.cwd = cwd;
 		let panel: PiPanel;
-		panel = new PiPanel(this.extensionUri, cwd, this.view, () => {
+		panel = new PiPanel(this.extensionUri, cwd, this.view, this.memento, () => {
 			if (this.panel === panel) this.panel = undefined;
 		});
 		this.panel = panel;
@@ -135,6 +156,7 @@ class PiPanel implements vscode.Disposable {
 	private readonly messageQueue: object[] = [];
 	private readonly pendingStarts: Array<{ id: string; sessionPath?: string }> = [];
 	private readonly statusBridge: PiStatusBridge;
+	private viewState: PiViewState;
 	private refreshTimer: NodeJS.Timeout | undefined;
 	private historyWatchSyncing = false;
 	private statusBridgeReady = false;
@@ -147,8 +169,10 @@ class PiPanel implements vscode.Disposable {
 		private readonly extensionUri: vscode.Uri,
 		private readonly cwd: string,
 		private readonly panel: vscode.WebviewView,
+		private readonly memento: vscode.Memento,
 		private readonly onDispose: () => void,
 	) {
+		this.viewState = normalizeViewState(this.memento.get(PI_VIEW_STATE_KEY));
 		this.statusBridge = new PiStatusBridge((report) => this.handleStatusReport(report));
 		this.panel.webview.options = {
 			enableScripts: true,
@@ -168,7 +192,7 @@ class PiPanel implements vscode.Disposable {
 			.finally(() => {
 				this.statusBridgeReady = true;
 				if (this.disposed) return;
-				this.startNewSession();
+				this.restoreSessions();
 				for (const pending of this.pendingStarts.splice(0)) this.startSession(pending.id, pending.sessionPath);
 			});
 	}
@@ -199,6 +223,21 @@ class PiPanel implements vscode.Disposable {
 				break;
 			case "close-view":
 				await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar");
+				break;
+			case "customize":
+				await vscode.commands.executeCommand("workbench.action.openSettings", "piAgent");
+				break;
+			case "detach":
+				this.detachSession(message.id);
+				break;
+			case "shutdown":
+				this.shutdownSession(message.id);
+				break;
+			case "archive":
+				this.archiveSession(message.id, message.archived);
+				break;
+			case "focus":
+				this.setFocusedSession(message.id);
 				break;
 			case "input":
 				if (message.data.length <= 1024 * 1024) this.sessions.get(message.id)?.process.write(message.data);
@@ -240,8 +279,23 @@ class PiPanel implements vscode.Disposable {
 		}
 	}
 
-	private startNewSession(): void {
+	startNewSession(): void {
 		this.startSession(randomUUID());
+	}
+
+	private restoreSessions(): void {
+		const restored = this.viewState.openSessions;
+		// Each start persists the tab list again, which rewrites viewState, so read the
+		// focused session before the loop.
+		const focused = this.viewState.focusedSessionId;
+		if (!restored.length) {
+			this.startNewSession();
+			return;
+		}
+		for (const record of restored) this.startSession(record.id, record.path);
+		// The webview reports which tab it settled on, so focus is persisted again from there.
+		const focusedSession = focused ? this.openSessionFor(focused) : undefined;
+		if (focusedSession) this.post({ type: "select", id: focusedSession.tabId });
 	}
 
 	private resumeSession(id: string): void {
@@ -252,6 +306,51 @@ class PiPanel implements vscode.Disposable {
 		}
 		const session = this.history.get(id);
 		if (session) this.startSession(id, session.path);
+	}
+
+	/** Closing a tab leaves Pi running; the session can be reopened from the list. */
+	private detachSession(tabId: string): void {
+		const session = this.sessions.get(tabId);
+		if (!session || !session.attached) return;
+		session.attached = false;
+		this.persistViewState();
+	}
+
+	private shutdownSession(tabId: string): void {
+		const session = this.sessions.get(tabId);
+		if (!session) return;
+		this.sessions.delete(tabId);
+		this.statusSequences.delete(tabId);
+		this.sessionStates.set(session.sessionId, "inactive");
+		session.process.kill();
+		this.post({ type: "session-close", id: tabId });
+		this.persistViewState();
+		this.postHistory();
+	}
+
+	// Archiving only files the session under Archive; it leaves Pi and the tab alone.
+	private archiveSession(sessionId: string, archived: boolean): void {
+		this.viewState = setArchived(this.viewState, sessionId, archived);
+		this.persistViewState();
+		this.postHistory();
+	}
+
+	private setFocusedSession(tabId: string): void {
+		const session = this.sessions.get(tabId);
+		if (!session) return;
+		if (session.attached && this.viewState.focusedSessionId === session.sessionId) return;
+		session.attached = true;
+		this.viewState = { ...this.viewState, focusedSessionId: session.sessionId };
+		this.persistViewState();
+	}
+
+	private persistViewState(): void {
+		if (this.disposed) return;
+		const openSessions = [...this.sessions.values()]
+			.filter((session) => session.attached)
+			.map((session) => (session.path ? { id: session.sessionId, path: session.path } : { id: session.sessionId }));
+		this.viewState = normalizeViewState({ ...this.viewState, openSessions });
+		void this.memento.update(PI_VIEW_STATE_KEY, this.viewState);
 	}
 
 	private startSession(id: string, sessionPath?: string): void {
@@ -278,7 +377,15 @@ class PiPanel implements vscode.Disposable {
 				env: { ...terminalEnvironment(), ...this.statusBridge.environmentFor(tabId) },
 			});
 			const title = this.titleForSession(id);
-			const session: RunningSession = { tabId, sessionId: id, startedAtMs: Date.now(), title, path: sessionPath, process };
+			const session: RunningSession = {
+				tabId,
+				sessionId: id,
+				startedAtMs: Date.now(),
+				title,
+				path: sessionPath,
+				attached: true,
+				process,
+			};
 			this.sessions.set(tabId, session);
 			this.statusSequences.delete(tabId);
 			this.sessionStates.set(id, "starting");
@@ -287,7 +394,8 @@ class PiPanel implements vscode.Disposable {
 				this.refreshSoon();
 			});
 			process.onExit(({ exitCode }) => this.handleExit(tabId, process, exitCode));
-			this.post({ type: "session-open", id: tabId, title });
+			this.post({ type: "session-open", id: tabId, sessionId: id, title });
+			this.persistViewState();
 			this.postHistory();
 			this.refreshSoon();
 		} catch (error) {
@@ -301,8 +409,11 @@ class PiPanel implements vscode.Disposable {
 		this.sessions.delete(tabId);
 		this.statusSequences.delete(tabId);
 		this.sessionStates.set(session.sessionId, "inactive");
+		this.persistViewState();
 		this.postHistory();
-		this.post({ type: "session-exit", id: tabId, exitCode });
+		// Pi owns the session tab's lifetime: once it exits there is nothing left to show.
+		this.post({ type: "session-close", id: tabId });
+		if (exitCode !== 0) void vscode.window.showWarningMessage(`Pi exited with code ${exitCode}.`);
 		this.refreshSoon();
 	}
 
@@ -334,9 +445,14 @@ class PiPanel implements vscode.Disposable {
 			this.sessionStates.set(session.sessionId, "inactive");
 			session.sessionId = report.sessionId;
 			session.startedAtMs = Date.now();
-			this.setSessionTitle(session, this.titleForSession(report.sessionId));
+			session.title = this.titleForSession(report.sessionId);
+			this.postSessionMeta(session);
+			this.persistViewState();
 		}
-		if (report.sessionPath) session.path = report.sessionPath;
+		if (report.sessionPath && report.sessionPath !== session.path) {
+			session.path = report.sessionPath;
+			this.persistViewState();
+		}
 		this.sessionStates.set(report.sessionId, report.state);
 		if (becameIdle(previousState, report.state)) this.post({ type: "attention" });
 		this.postHistory();
@@ -357,7 +473,11 @@ class PiPanel implements vscode.Disposable {
 	private setSessionTitle(session: RunningSession, title: string): void {
 		if (session.title === title) return;
 		session.title = title;
-		this.post({ type: "session-title", id: session.tabId, title });
+		this.postSessionMeta(session);
+	}
+
+	private postSessionMeta(session: RunningSession): void {
+		this.post({ type: "session-meta", id: session.tabId, sessionId: session.sessionId, title: session.title });
 	}
 
 	private async syncHistoryWatchers(): Promise<void> {
@@ -392,12 +512,15 @@ class PiPanel implements vscode.Disposable {
 	}
 
 	private postHistory(): void {
-		const sessions = [...this.history.values()].map(({ id, title, createdAtMs }) => {
+		const archived = new Set(this.viewState.archivedSessionIds);
+		const sessions = [...this.history.values()].map(({ id, title, createdAtMs, mtimeMs }) => {
 			const openSession = this.openSessionFor(id);
 			return {
 				id,
 				title,
 				createdAtMs,
+				updatedAtMs: mtimeMs,
+				archived: archived.has(id),
 				tabId: openSession?.tabId,
 				state: this.sessionStates.get(id) ?? (openSession ? "starting" : "inactive"),
 			};
@@ -408,11 +531,13 @@ class PiPanel implements vscode.Disposable {
 				id: session.sessionId,
 				title: session.title,
 				createdAtMs: session.startedAtMs,
+				updatedAtMs: session.startedAtMs,
+				archived: archived.has(session.sessionId),
 				tabId: session.tabId,
 				state: this.sessionStates.get(session.sessionId) ?? "starting",
 			});
 		}
-		sessions.sort((a, b) => b.createdAtMs - a.createdAtMs);
+		sessions.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
 		this.post({ type: "history", sessions });
 	}
 
@@ -478,10 +603,22 @@ function isClientMessage(value: unknown): value is ClientMessage {
 	if (!value || typeof value !== "object" || !("type" in value)) return false;
 	const message = value as Record<string, unknown>;
 	if (typeof message.type !== "string") return false;
-	if (message.type === "ready" || message.type === "refresh" || message.type === "new" || message.type === "close-view") return true;
+	if (
+		message.type === "ready" ||
+		message.type === "refresh" ||
+		message.type === "new" ||
+		message.type === "close-view" ||
+		message.type === "customize"
+	) {
+		return true;
+	}
 	if (message.type === "input") return typeof message.id === "string" && typeof message.data === "string";
 	if (message.type === "resize") {
 		return typeof message.id === "string" && typeof message.cols === "number" && typeof message.rows === "number";
+	}
+	if (message.type === "archive") return typeof message.id === "string" && typeof message.archived === "boolean";
+	if (message.type === "detach" || message.type === "shutdown" || message.type === "focus") {
+		return typeof message.id === "string";
 	}
 	if (message.type === "open-link") {
 		return (
@@ -511,30 +648,45 @@ function webviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string 
 		<main id="terminal-pane" aria-label="Pi terminals">
 			<div id="tabbar">
 				<nav id="tabs" aria-label="Open Pi sessions"></nav>
-				<button id="show-history" class="icon-button" type="button" title="Show sessions" aria-label="Show sessions" hidden>☰</button>
-				<button id="new-tab" class="icon-button" type="button" title="New Pi session" aria-label="New Pi session">+</button>
-			</div>
-			<div id="terminal-hosts"></div>
-		</main>
-		<aside id="history-pane" aria-label="Pi session history">
-			<header>
-				<h1>Sessions</h1>
-				<div id="history-actions">
-					<button id="new-session" type="button" title="New Pi session"><span class="new-icon" aria-hidden="true">+</span>New</button>
-					<button id="refresh" type="button" title="Refresh sessions" aria-label="Refresh sessions">↻</button>
-					<button id="hide-history" type="button" title="Hide sessions" aria-label="Hide sessions">◀</button>
+				<div id="tabbar-actions">
+					<button id="new-tab" class="icon-button" type="button" title="New session" aria-label="New session"></button>
+					<button id="tab-menu" class="icon-button" type="button" title="More actions" aria-label="More actions" aria-haspopup="menu"></button>
+					<button id="show-sidebar" class="icon-button" type="button" title="Show sessions" aria-label="Show sessions" hidden></button>
 				</div>
-			</header>
-			<div id="history"></div>
+			</div>
+			<div id="terminal-body">
+				<div id="terminal-hosts"></div>
+				<div id="empty-state" hidden>
+					<p class="empty-title">No open session</p>
+					<p class="empty-hint">Start a new session, or pick one from the list.</p>
+					<button id="empty-new" class="primary-button" type="button">New session</button>
+				</div>
+			</div>
+		</main>
+		<aside id="sidebar" aria-label="Pi sessions">
+			<div id="sidebar-header">
+				<button id="customize" class="icon-button" type="button" title="Customize Pi settings" aria-label="Customize Pi settings"></button>
+				<button id="refresh" class="icon-button" type="button" title="Refresh sessions" aria-label="Refresh sessions"></button>
+				<button id="hide-sidebar" class="icon-button" type="button" title="Hide sessions" aria-label="Hide sessions"></button>
+			</div>
+			<div id="search-field">
+				<span class="search-icon" aria-hidden="true"></span>
+				<input id="search" type="text" placeholder="Search sessions..." aria-label="Search sessions" autocomplete="off" spellcheck="false">
+			</div>
+			<nav id="sidebar-actions" aria-label="Session actions">
+				<button id="new-session" class="sidebar-action" type="button">
+					<span class="action-label">New session</span>
+				</button>
+			</nav>
+			<div id="session-list"></div>
 		</aside>
 	</div>
-	<div id="context-menu" role="menu" hidden>
-		<button id="context-hide" type="button" role="menuitem">Hide terminal</button>
-	</div>
+	<div id="menu" role="menu" hidden></div>
 	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "xterm", "lib", "xterm.js")}"></script>
 	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js")}"></script>
 	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-web-links", "lib", "addon-web-links.js")}"></script>
 	<script nonce="${nonce}" src="${uri("media", "wrapped-path-links.js")}"></script>
+	<script nonce="${nonce}" src="${uri("media", "session-view.js")}"></script>
 	<script nonce="${nonce}" src="${uri("media", "main.js")}"></script>
 </body>
 </html>`;

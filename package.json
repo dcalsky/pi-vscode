@@ -2,7 +2,7 @@
   "name": "pi-vscode",
   "displayName": "Pi",
   "description": "Run and resume pi coding-agent sessions inside VS Code.",
-  "version": "0.0.13",
+  "version": "0.0.18",
   "publisher": "local",
   "license": "MIT",
   "engines": {
@@ -25,6 +25,11 @@
         "command": "piAgent.open",
         "title": "Pi: Open",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "piAgent.newSession",
+        "title": "Pi: New Session",
+        "icon": "$(add)"
       },
       {
         "command": "piAgent.closeSessionOrView",
@@ -82,7 +87,7 @@
   "scripts": {
     "compile": "tsc -p .",
     "vscode:prepublish": "npm run compile",
-    "test": "npm run compile && node --test out/test/session-store.test.js out/test/status-bridge.test.js out/test/terminal-links.test.js out/test/terminal-link-provider.test.js",
+    "test": "npm run compile && node --test out/test/session-store.test.js out/test/session-view.test.js out/test/status-bridge.test.js out/test/terminal-links.test.js out/test/terminal-link-provider.test.js out/test/view-state.test.js",
     "package": "npm version patch --no-git-tag-version --ignore-scripts && npx --yes @vscode/vsce package"
   },
   "dependencies": {
