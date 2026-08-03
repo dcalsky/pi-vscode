@@ -1,6 +1,12 @@
 # Pi for VS Code
 
-A small local VS Code extension for running [pi coding agent](https://pi.dev) sessions in an embedded terminal.
+Run [pi coding agent](https://pi.dev) inside VS Code, in a real terminal in the Secondary Side Bar.
+
+- **Keep several sessions open at once.** Each session gets its own tab, and the list beside them holds every session for this folder, newest first. Click one to jump to it, or to resume it from disk if it is no longer running. Which tabs were open is remembered per folder and reopened next time. It is the session list you know from Cursor and Copilot, over Pi's own transcripts on disk.
+- **See which sessions are working.** Every entry carries a live glyph: spinning blue while Pi is working, green when it is idle and waiting on you, gray when it is not running. A short tone plays the moment a session goes idle, so you can start one, switch away, and be told when it wants you back.
+- **Open the files Pi mentions.** ⌘-click (Ctrl on Windows and Linux) any path Pi prints and it opens in the editor, on the right line and column. Paths Pi wrapped across two rows work too, and copying wrapped text gives you the path back in one piece.
+
+## What you get
 
 - **Left pane:** one xterm.js terminal per open Pi session, with its tabs, **+** and an overflow menu in the header.
 - **Right pane:** header icons for **Customize** (Pi settings), **Refresh** and the pane toggle, then search, **New session**, and the workspace's sessions grouped as `Today` / `Yesterday` / `Last 7 Days` / `Last 30 Days` / `Older` / `Archive` by last write. Long groups collapse behind **More**, and each group name collapses on click—hovering it reveals a chevron. The latest JSONL `session_info.name` is the title; sessions without one display `New Session`. A left-hand glyph updates live: spinning blue = working, green = idle, gray = not open.
