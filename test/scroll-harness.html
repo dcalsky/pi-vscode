@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<title>Pi background-tab scroll verification</title>
+	<link rel="stylesheet" href="/node_modules/@xterm/xterm/css/xterm.css">
+	<style>
+		* { box-sizing: border-box; }
+		html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
+		body { background: #1e1e1e; color: #ccc; font-family: sans-serif; }
+		#terminal-body { position: absolute; inset: 44px 0 0 0; }
+		#terminal-hosts { position: absolute; inset: 0; }
+		.terminal-host { position: absolute; inset: 0; padding: 0 0 4px; overflow: hidden; }
+		.xterm { height: 100%; }
+		[hidden] { display: none !important; }
+		#result { position: absolute; top: 0; left: 0; margin: 0; height: 44px; font-family: monospace; font-size: 12px; }
+	</style>
+</head>
+<body>
+	<pre id="result">Waiting…</pre>
+	<div id="terminal-body"><div id="terminal-hosts"></div></div>
+	<script src="/node_modules/@xterm/xterm/lib/xterm.js"></script>
+	<script src="/node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+	<script>
+		// A tab that collects output while it is display:none makes xterm record a viewport
+		// height of 0, which shortens the scroll area by one screen and puts the newest rows
+		// out of reach. media/main.js sendSize() resyncs the viewport when the host is shown.
+		const hosts = document.getElementById("terminal-hosts");
+		const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+		function openTerminal() {
+			const host = document.createElement("div");
+			host.className = "terminal-host";
+			hosts.append(host);
+			const term = new Terminal({ fontSize: 13 });
+			const fit = new FitAddon.FitAddon();
+			term.loadAddon(fit);
+			term.open(host);
+			fit.fit();
+			return { host, term, fit };
+		}
+
+		function write(term, lines) {
+			let out = "";
+			for (let i = 0; i < lines; i++) out += `line ${i} ${"x".repeat(20)}\r\n`;
+			return new Promise((resolve) => term.write(out, resolve));
+		}
+
+		function reachableBottom(entry) {
+			const view = entry.host.querySelector(".xterm-viewport");
+			const cellHeight = entry.term._core._renderService.dimensions.css.cell.height;
+			return {
+				maxScrollTop: view.scrollHeight - view.clientHeight,
+				bottomScrollTop: entry.term.buffer.active.baseY * cellHeight,
+			};
+		}
+
+		(async () => {
+			const entry = openTerminal();
+			entry.host.hidden = true;
+			await write(entry.term, 400);
+			await frame();
+
+			entry.host.hidden = false;
+			await frame();
+			const before = reachableBottom(entry);
+
+			// The two lines sendSize() runs when a tab is shown or the pane is resized.
+			entry.fit.fit();
+			entry.term._core.viewport?.syncScrollArea(true);
+			await frame();
+			const after = reachableBottom(entry);
+
+			const checks = {
+				reproduced: before.maxScrollTop < before.bottomScrollTop,
+				fixed: after.maxScrollTop === after.bottomScrollTop,
+				before,
+				after,
+			};
+			document.getElementById("result").textContent =
+				`${checks.reproduced && checks.fixed ? "PASS" : "FAIL"} ${JSON.stringify(checks)}`;
+			document.body.dataset.checks = JSON.stringify(checks);
+			document.body.dataset.ready = "true";
+		})();
+	</script>
+</body>
+</html>

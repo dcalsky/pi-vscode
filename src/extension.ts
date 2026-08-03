@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import * as pty from "node-pty";
 import * as vscode from "vscode";
 import {
+	deleteSessionFiles,
 	listWorkspaceSessions,
 	NEW_SESSION_TITLE,
 	sessionDirectoriesForWorkspace,
@@ -36,6 +37,7 @@ type ClientMessage =
 	| { type: "focus"; id: string }
 	| { type: "detach"; id: string }
 	| { type: "shutdown"; id: string }
+	| { type: "delete"; id: string }
 	| { type: "archive"; id: string; archived: boolean }
 	| { type: "open-link"; kind: "file" | "url"; target: string };
 
@@ -233,6 +235,9 @@ class PiPanel implements vscode.Disposable {
 			case "shutdown":
 				this.shutdownSession(message.id);
 				break;
+			case "delete":
+				await this.deleteSession(message.id);
+				break;
 			case "archive":
 				this.archiveSession(message.id, message.archived);
 				break;
@@ -324,6 +329,36 @@ class PiPanel implements vscode.Disposable {
 		this.sessionStates.set(session.sessionId, "inactive");
 		session.process.kill();
 		this.post({ type: "session-close", id: tabId });
+		this.persistViewState();
+		this.postHistory();
+	}
+
+	/** Deleting is keyed by session id, not tab id: a session can be deleted without a live tab. */
+	private async deleteSession(sessionId: string): Promise<void> {
+		const title = this.history.get(sessionId)?.title ?? this.openSessionFor(sessionId)?.title ?? NEW_SESSION_TITLE;
+		const choice = await vscode.window.showWarningMessage(
+			`Delete session "${title}"?`,
+			{ modal: true, detail: "Pi stops and this session's saved files are removed from disk. This cannot be undone." },
+			"Delete",
+		);
+		if (choice !== "Delete" || this.disposed) return;
+
+		// ponytail: deletes right after the kill; wait for process exit only if Pi is seen re-creating the transcript.
+		const open = this.openSessionFor(sessionId);
+		if (open) this.shutdownSession(open.tabId);
+		const path = this.history.get(sessionId)?.path ?? open?.path;
+		try {
+			if (path) await deleteSessionFiles(path);
+		} catch (error) {
+			// The next refresh restores whatever survived on disk.
+			void vscode.window.showErrorMessage(`Could not delete "${title}": ${errorMessage(error)}`);
+			return;
+		}
+		if (this.disposed) return;
+		this.history.delete(sessionId);
+		this.sessionStates.delete(sessionId);
+		// The archive list is the only view state keyed by session id; the rest is rebuilt from live tabs.
+		this.viewState = setArchived(this.viewState, sessionId, false);
 		this.persistViewState();
 		this.postHistory();
 	}
@@ -617,7 +652,7 @@ function isClientMessage(value: unknown): value is ClientMessage {
 		return typeof message.id === "string" && typeof message.cols === "number" && typeof message.rows === "number";
 	}
 	if (message.type === "archive") return typeof message.id === "string" && typeof message.archived === "boolean";
-	if (message.type === "detach" || message.type === "shutdown" || message.type === "focus") {
+	if (message.type === "detach" || message.type === "shutdown" || message.type === "delete" || message.type === "focus") {
 		return typeof message.id === "string";
 	}
 	if (message.type === "open-link") {

@@ -22,6 +22,7 @@
 	const collapsedGroups = new Set();
 	const GROUP_PREVIEW_COUNT = 6;
 	const STOP_LABEL = "Stop Pi";
+	const DELETE_HINT = "Stop Pi and delete this session from disk";
 	let activeId;
 	let historySessions = [];
 
@@ -122,6 +123,10 @@
 		const entry = terminals.get(id);
 		if (!entry || entry.host.hidden) return;
 		entry.fit.fit();
+		// xterm sizes its scroll area from the viewport height it read at the last refresh.
+		// A refresh that lands while the host is display:none records 0 and leaves the scroll
+		// area one screen short, so the newest rows stay unreachable until output resumes.
+		entry.term._core.viewport?.syncScrollArea(true);
 		vscode.postMessage({ type: "resize", id, cols: entry.term.cols, rows: entry.term.rows });
 	}
 
@@ -150,6 +155,15 @@
 			term.loadAddon(fit);
 			registerTerminalLinks(term);
 			term.open(host);
+			// Pi hard-wraps Markdown to the terminal width and emits each row as a
+			// separate physical line, so xterm's copy would insert newlines at the wrap
+			// points. This runs after xterm's own copy handler (registered during open)
+			// and rewrites the clipboard with wrap points joined.
+			term.element.addEventListener("copy", (event) => {
+				if (term.element.classList.contains("column-select")) return;
+				const text = WrappedPathLinks.copySelectionText(term);
+				if (text !== undefined && event.clipboardData) event.clipboardData.setData("text/plain", text);
+			});
 			term.onData((data) => vscode.postMessage({ type: "input", id, data }));
 			host.addEventListener("mousedown", () => term.focus());
 			entry = { host, term, fit, sessionId, title, detached: false };
@@ -231,6 +245,12 @@
 		vscode.postMessage({ type: "archive", id: sessionId, archived });
 	}
 
+	// The extension asks for confirmation, then removes the tab and the list entry.
+	function deleteSession(sessionId) {
+		if (!sessionId) return;
+		vscode.postMessage({ type: "delete", id: sessionId });
+	}
+
 	function closeActiveSessionOrView() {
 		const active = activeId && terminals.get(activeId);
 		if (active && !active.detached) {
@@ -288,6 +308,7 @@
 			{ label: "Close", hint: "Close this tab; Pi keeps running", run: () => closeTerminal(id) },
 			{ label: STOP_LABEL, hint: "Stop the Pi process and close this tab", run: () => shutdownTerminal(id) },
 			{ label: "Archive", hint: "File this session under Archive", run: () => archiveTerminal(id) },
+			{ label: "Delete", hint: DELETE_HINT, run: () => deleteSession(terminals.get(id)?.sessionId) },
 		];
 	}
 
@@ -416,6 +437,7 @@
 				hint: archived ? "Move this session back to its date group" : "File this session under Archive",
 				run: () => setArchived(session.id, !archived),
 			});
+			items.push({ label: "Delete", hint: DELETE_HINT, run: () => deleteSession(session.id) });
 			showMenu(items, event.clientX, event.clientY);
 		});
 		return row;
@@ -531,6 +553,11 @@
 			items.push({ label: "Archive session", run: () => archiveTerminal(activeId) });
 			items.push({ label: "Close session", hint: "Pi keeps running", run: () => closeTerminal(activeId) });
 			items.push({ label: `${STOP_LABEL} for this session`, run: () => shutdownTerminal(activeId) });
+			items.push({
+				label: "Delete session",
+				hint: DELETE_HINT,
+				run: () => deleteSession(terminals.get(activeId)?.sessionId),
+			});
 		}
 		items.push({
 			label: sidebar.hidden ? "Show sessions" : "Hide sessions",

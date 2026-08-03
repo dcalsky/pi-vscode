@@ -47,6 +47,14 @@ export async function listWorkspaceSessions(cwd: string, options: SessionSearchO
 	return [...unique.values()].sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
+/** A session persists as its JSONL transcript plus a sidecar directory of the same name. */
+export async function deleteSessionFiles(path: string): Promise<void> {
+	if (!path.endsWith(".jsonl")) throw new Error(`Not a session transcript: ${path}`);
+	await fs.rm(path, { force: true });
+	await fs.rm(path.slice(0, -".jsonl".length), { recursive: true, force: true });
+	sessionCache.delete(path);
+}
+
 export async function sessionDirectoriesForWorkspace(
 	cwd: string,
 	options: SessionSearchOptions = {},

@@ -156,6 +156,83 @@
 		});
 	}
 
+	// xterm joins selected rows with a newline unless the row before the break
+	// isWrapped. Pi word-wraps Markdown to the terminal width itself and emits every
+	// row as its own physical line, so copying a wrapped paragraph yields newlines
+	// Pi's input never contained. Take xterm's own selection text and put Pi's wrap
+	// points back together. Returns undefined when there is no selection;
+	// `position` is only for tests, callers omit it.
+	function copySelectionText(terminal, position) {
+		const selection = terminal.getSelection();
+		// getSelectionPosition reports 0-based, ordered buffer coordinates.
+		const range = position ?? terminal.getSelectionPosition();
+		if (!selection || !range) return undefined;
+		const separator = selection.includes("\r\n") ? "\r\n" : "\n";
+		const segments = selection.split(separator);
+		const rows = selectedLogicalRows(terminal, range);
+		if (segments.length !== rows.length) return selection;
+		let result = segments[0];
+		for (let index = 1; index < segments.length; index++) {
+			const joiner = wrapJoiner(terminal, rows[index - 1].endLineIndex, rows[index].startLineIndex);
+			if (joiner === undefined) {
+				result += separator + segments[index];
+				continue;
+			}
+			// The spaces around a wrap point are Pi's padding and indent, not text.
+			result = result.replace(/ +$/, "") + joiner + segments[index].replace(/^ +/, "");
+		}
+		return result;
+	}
+
+	// One entry per string in xterm's selection text: rows xterm wrapped itself are
+	// already part of the row that started them.
+	function selectedLogicalRows(terminal, range) {
+		const buffer = terminal.buffer.active;
+		const rows = [];
+		for (let lineIndex = range.start.y; lineIndex <= range.end.y; ) {
+			if (!buffer.getLine(lineIndex)) return [];
+			let endLineIndex = lineIndex;
+			while (endLineIndex < range.end.y && buffer.getLine(endLineIndex + 1)?.isWrapped) endLineIndex++;
+			rows.push({ startLineIndex: lineIndex, endLineIndex });
+			lineIndex = endLineIndex + 1;
+		}
+		return rows;
+	}
+
+	// What Pi dropped at a row boundary: nothing when its wrap split a word at the
+	// right content edge, one space when it wrapped between words, and undefined for
+	// a real line break — including a boundary the next row's first word would still
+	// have fit on, which Pi therefore never wrapped.
+	function wrapJoiner(terminal, lineIndex, nextLineIndex) {
+		const buffer = terminal.buffer.active;
+		const line = buffer.getLine(lineIndex);
+		const nextLine = buffer.getLine(nextLineIndex);
+		if (!line || !nextLine) return undefined;
+		// xterm wrapped the previous row itself, so its text already continues across
+		// it and the boundary to the next row is a real line break. Pi never writes
+		// rows that wrap, so this only fires for non-Pi output.
+		if (line.isWrapped) return undefined;
+		// translateToString only trims cells Pi never wrote, so drop its padding here.
+		const text = line.translateToString(true).trimEnd();
+		const nextText = nextLine.translateToString(true).trimEnd();
+		if (!text || !nextText || STRUCTURE_START_PATTERN.test(nextText.trimStart())) return undefined;
+		if (reachesRenderedEdge(terminal, lineIndex, text, text.length)) return "";
+
+		const nextSegment = { lineIndex: nextLineIndex, startColumn: 0, text: nextText };
+		const indent = /^ */.exec(nextText)[0].length;
+		const word = /^\S+/.exec(nextText.slice(indent))[0];
+		const wordWidth =
+			columnForStringOffset(terminal, nextSegment, indent + word.length) -
+			columnForStringOffset(terminal, nextSegment, indent);
+		const endColumn = columnForStringOffset(terminal, { lineIndex, startColumn: 0, text }, text.length);
+		return endColumn + 1 + wordWidth > terminal.cols - 1 ? " " : undefined;
+	}
+
+	// Rows that begin a distinct rendered block — list item marker, table or quote
+	// border, horizontal rule, or code fence — are never continuations of the
+	// previous row.
+	const STRUCTURE_START_PATTERN = /^(?:[-*+]|\d+[.)])\s|[│├┌└┐┘┤─]|`{3}/;
+
 	function targetKind(target) {
 		return /^https?:\/\//i.test(target) ? "url" : "file";
 	}
@@ -213,5 +290,5 @@
 		return [lineIndex, startColumn];
 	}
 
-	return { createPathLinkProvider, computePathLinks, logicalLineAt, mapStringIndex };
+	return { createPathLinkProvider, computePathLinks, copySelectionText, logicalLineAt, mapStringIndex };
 });

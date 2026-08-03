@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { appendFile, mkdtemp, mkdir, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { encodeWorkspaceDirectory, listWorkspaceSessions, NEW_SESSION_TITLE } from "../session-store";
+import {
+	deleteSessionFiles,
+	encodeWorkspaceDirectory,
+	listWorkspaceSessions,
+	NEW_SESSION_TITLE,
+} from "../session-store";
 
 test("lists only this workspace's sessions, newest first", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pi-vscode-"));
@@ -78,6 +84,32 @@ test("finds sessions when the workspace is opened through a symlink", async (t) 
 		sessions.map((session) => session.id),
 		["linked"],
 	);
+});
+
+test("deleting a session removes its transcript and sidecar directory only", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pi-vscode-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+
+	const workspace = join(root, "project");
+	const agentDir = join(root, "agent");
+	const sessionsDir = join(agentDir, "sessions", encodeWorkspaceDirectory(workspace));
+	const doomed = join(sessionsDir, "doomed.jsonl");
+	await mkdir(join(sessionsDir, "doomed", "state"), { recursive: true });
+	await writeFile(join(sessionsDir, "doomed", "state", "notes.json"), "{}");
+	await writeFile(doomed, sessionHeader("doomed", workspace));
+	await writeFile(join(sessionsDir, "keep.jsonl"), sessionHeader("keep", workspace));
+	assert.equal((await listWorkspaceSessions(workspace, { agentDir, env: {} })).length, 2);
+
+	await deleteSessionFiles(doomed);
+
+	assert.deepEqual(
+		(await listWorkspaceSessions(workspace, { agentDir, env: {} })).map((session) => session.id),
+		["keep"],
+	);
+	assert.equal(existsSync(join(sessionsDir, "doomed")), false);
+	await deleteSessionFiles(doomed);
+	await assert.rejects(deleteSessionFiles(sessionsDir), /Not a session transcript/);
+	assert.equal(existsSync(sessionsDir), true);
 });
 
 function sessionHeader(id: string, cwd: string, timestamp?: string): string {

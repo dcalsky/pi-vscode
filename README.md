@@ -9,10 +9,12 @@ A small local VS Code extension for running [pi coding agent](https://pi.dev) se
 - Open sessions and the focused one are remembered per workspace and reopened (`pi --session <file>`) the next time that folder is opened. Archived sessions and closed tabs are not reopened.
 - Use **New session** or **+** to start a session. `×`, **Close** in either context menu, and the platform's **Close Editor** shortcut (`⌘W` on macOS, `Ctrl+F4` on Windows, `Ctrl+W` on Linux) close the tab but leave Pi running—the session keeps its live status in the list, and selecting it brings the tab back with its scrollback. Once no tab is open, the shortcut closes Pi's secondary side bar.
 - **Stop Pi** in either context menu ends the Pi process and closes its tab. It is offered only while a session has a live process; the session itself stays in the list and can be resumed from disk.
+- **Delete** in either context menu asks for confirmation, then stops Pi, closes the tab and erases the session's transcript and sidecar directory from `~/.pi/agent/sessions/--<cwd>--/`. The session leaves the tab bar and the list for good.
 - A tab closes on its own when its Pi process exits; a non-zero exit is reported as a warning notification.
 - Clicking a saved session focuses its existing terminal or starts `pi --session <file>`.
 - Below about 460px the view scrolls sideways rather than dropping the session list; hide the list with the pane toggle to use Pi in a narrower side bar.
 - Hold **⌘** (macOS) or **Ctrl** (Windows/Linux) and click a file path or HTTP(S) URL to open it. Source locations such as `src/file.ts:12:3` are respected.
+- Copying text Pi word-wrapped across rows puts it back on one line—no newline where Pi split a word, a single space where it wrapped between words. Blank rows, list items, quotes and code fences keep their line breaks.
 
 Pi stores current sessions in `~/.pi/agent/sessions/--<cwd>--/`. The extension also reads the legacy singular `session/` directory. It filters JSONL headers by `cwd`, so only the open workspace's sessions appear. It loads its bundled status extension per Pi process with `--extension`; it does not modify your `~/.pi` configuration.
 
