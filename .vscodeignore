@@ -15,6 +15,7 @@ node_modules/node-pty/prebuilds/**/*.pdb
 node_modules/node-pty/lib/**/*.test.js
 node_modules/@xterm/*/src/**
 node_modules/**/*.map
+node_modules/node-addon-api/**
 
 .pi-subagents/**
 test/**
