@@ -17,7 +17,7 @@
 	<script src="/node_modules/@xterm/xterm/lib/xterm.js"></script>
 	<script src="/media/wrapped-path-links.js"></script>
 	<script>
-		const target = "/Users/yiheng/go/src/sand-api/docs/bugfix-rewrite-rda-sql-easysql.md";
+		const target = "/home/developer/src/sample-api/doc/bugfix-rewrite-rda-sql-easysql.md";
 		const terminal = new Terminal({ cols: 60, rows: 8, fontSize: 16 });
 		const provider = WrappedPathLinks.createPathLinkProvider(terminal, (_event, value, kind) => {
 			document.getElementById("result").textContent = JSON.stringify({ value, kind });

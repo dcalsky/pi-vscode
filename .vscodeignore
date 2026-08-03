@@ -12,7 +12,10 @@ node_modules/node-pty/third_party/**
 node_modules/node-pty/scripts/**
 node_modules/node-pty/binding.gyp
 node_modules/node-pty/prebuilds/**/*.pdb
+node_modules/node-pty/lib/**/*.test.js
+node_modules/@xterm/*/src/**
+node_modules/**/*.map
 
 .pi-subagents/**
-wordwrap-link-mre/**
 test/**
+**/.DS_Store

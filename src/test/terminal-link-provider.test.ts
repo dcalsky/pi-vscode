@@ -30,7 +30,7 @@ const { WebLinksAddon } = require("@xterm/addon-web-links") as typeof import("@x
 test("returns the full Pi session path from every xterm soft-wrap row", async () => {
 	const posted: object[] = [];
 	const terminal = new Terminal({ cols: 42, rows: 10 });
-	const target = "/Users/yiheng/go/src/sand-api/docs/bugfix-rewrite-rda-sql-easysql.md";
+	const target = "/home/developer/src/sample-api/doc/bugfix-rewrite-rda-sql-easysql.md";
 	const provider = wrappedPathLinks.createPathLinkProvider(terminal, (event, path) => {
 		if (event.metaKey || event.ctrlKey) posted.push({ type: "open-link", kind: "file", target: path });
 	});
@@ -56,7 +56,7 @@ test("returns the full Pi session path from every xterm soft-wrap row", async ()
 
 test("returns the full path from every Pi Markdown physical continuation row", async () => {
 	const posted: object[] = [];
-	const target = "/Users/yiheng/go/src/sand-api/docs/bugfix-rewrite-rda-sql-easysql.md";
+	const target = "/home/developer/src/sample-api/doc/bugfix-rewrite-rda-sql-easysql.md";
 	const contentColumn = 2;
 	const terminal = new Terminal({ cols: 62, rows: 10 });
 	const firstChunkLength = terminal.cols - contentColumn;
@@ -87,7 +87,7 @@ test("returns the full path from every Pi Markdown physical continuation row", a
 });
 
 test("returns the full path from Pi Markdown paragraph rows with output padding", async () => {
-	const target = "/Users/yiheng/go/src/sand-api/docs/bugfix-rewrite-rda-sql-easysql.md";
+	const target = "/home/developer/src/sample-api/doc/bugfix-rewrite-rda-sql-easysql.md";
 	// 58 content cells reproduces the screenshot split: `...-rda-sql-` + `easysql.md`.
 	const terminal = new Terminal({ cols: 60, rows: 10 });
 	const outputPadding = 1;
@@ -149,8 +149,8 @@ test("unified provider opens an unwrapped URL as a URL", async () => {
 });
 
 test("does not merge adjacent Pi Markdown list items", async () => {
-	const firstTarget = "/Users/yiheng/go/src/sand-api/docs/bugfix-rewrite-rda-sql-easysql.md";
-	const secondTarget = "/Users/yiheng/go/src/sand-api/docs/decisions/ADR-pivot-table-tool-vs-subagent.md";
+	const firstTarget = "/home/developer/src/sample-api/doc/bugfix-rewrite-rda-sql-easysql.md";
+	const secondTarget = "/home/developer/src/sample-api/doc/decisions/ADR-pivot-table-tool-vs-subagent.md";
 	const terminal = new Terminal({ cols: 62, rows: 10 });
 	const physicalRows = [firstTarget, secondTarget].flatMap((target) => [
 		`- ${target.slice(0, terminal.cols - 2)}`,
