@@ -13,6 +13,7 @@ import {
 import { becameIdle, PiStatusBridge, type PiSessionState, type PiStatusReport } from "./status-bridge";
 import { httpUrl, resolveFileLink } from "./terminal-links";
 import { normalizeViewState, setArchived, type PiViewState } from "./view-state";
+import { terminalOptions } from "./xterm-options";
 
 interface RunningSession {
 	tabId: string;
@@ -184,6 +185,16 @@ class PiPanel implements vscode.Disposable {
 			],
 		};
 		this.panel.webview.html = webviewHtml(this.panel.webview, extensionUri);
+		this.postTerminalOptions();
+		vscode.workspace.onDidChangeConfiguration(
+			(event) => {
+				if (event.affectsConfiguration("terminal.integrated") || event.affectsConfiguration("editor")) {
+					this.postTerminalOptions();
+				}
+			},
+			undefined,
+			this.disposables,
+		);
 		this.panel.webview.onDidReceiveMessage((message: unknown) => void this.receive(message), undefined, this.disposables);
 		this.panel.onDidDispose(() => this.dispose(), undefined, this.disposables);
 
@@ -584,6 +595,13 @@ class PiPanel implements vscode.Disposable {
 		}, 500);
 	}
 
+	private postTerminalOptions(): void {
+		this.post({
+			type: "options",
+			options: terminalOptions((section) => vscode.workspace.getConfiguration(section)),
+		});
+	}
+
 	private post(message: object): void {
 		if (this.disposed) return;
 		if (!this.ready) {
@@ -691,6 +709,13 @@ function webviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string 
 			</div>
 			<div id="terminal-body">
 				<div id="terminal-hosts"></div>
+				<div id="find" hidden>
+					<input id="find-input" type="text" placeholder="Find" aria-label="Find in terminal" autocomplete="off" spellcheck="false">
+					<span id="find-count" aria-live="polite">No results</span>
+					<button id="find-prev" class="icon-button" type="button" title="Previous match (Shift+Enter)" aria-label="Previous match"></button>
+					<button id="find-next" class="icon-button" type="button" title="Next match (Enter)" aria-label="Next match"></button>
+					<button id="find-close" class="icon-button" type="button" title="Close (Escape)" aria-label="Close find"></button>
+				</div>
 				<div id="empty-state" hidden>
 					<p class="empty-title">No open session</p>
 					<p class="empty-hint">Start a new session, or pick one from the list.</p>
@@ -720,6 +745,9 @@ function webviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string 
 	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "xterm", "lib", "xterm.js")}"></script>
 	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js")}"></script>
 	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-web-links", "lib", "addon-web-links.js")}"></script>
+	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-webgl", "lib", "addon-webgl.js")}"></script>
+	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-unicode11", "lib", "addon-unicode11.js")}"></script>
+	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-search", "lib", "addon-search.js")}"></script>
 	<script nonce="${nonce}" src="${uri("media", "wrapped-path-links.js")}"></script>
 	<script nonce="${nonce}" src="${uri("media", "session-view.js")}"></script>
 	<script nonce="${nonce}" src="${uri("media", "main.js")}"></script>

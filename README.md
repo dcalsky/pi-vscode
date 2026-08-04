@@ -22,8 +22,6 @@ Run [pi coding agent](https://pi.dev) inside VS Code, in a real terminal in the 
 - Hold **⌘** (macOS) or **Ctrl** (Windows/Linux) and click a file path or HTTP(S) URL to open it. Source locations such as `src/file.ts:12:3` are respected.
 - Copying text Pi word-wrapped across rows puts it back on one line—no newline where Pi split a word, a single space where it wrapped between words. Blank rows, list items, quotes and code fences keep their line breaks.
 
-Pi stores current sessions in `~/.pi/agent/sessions/--<cwd>--/`. The extension also reads the legacy singular `session/` directory. It filters JSONL headers by `cwd`, so only the open workspace's sessions appear. It loads its bundled status extension per Pi process with `--extension`; it does not modify your `~/.pi` configuration.
-
 ## Use
 
 1. Install and authenticate `pi`; `pi --version` must work in VS Code's environment.

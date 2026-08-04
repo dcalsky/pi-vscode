@@ -16,6 +16,12 @@
 	const hideSidebar = document.getElementById("hide-sidebar");
 	const showSidebar = document.getElementById("show-sidebar");
 	const menu = document.getElementById("menu");
+	const find = document.getElementById("find");
+	const findInput = document.getElementById("find-input");
+	const findCount = document.getElementById("find-count");
+	const findPrev = document.getElementById("find-prev");
+	const findNext = document.getElementById("find-next");
+	const findClose = document.getElementById("find-close");
 
 	const terminals = new Map();
 	const expandedGroups = new Set();
@@ -57,6 +63,7 @@
 		refresh: '<path d="M13.3 8a5.3 5.3 0 1 1-1.6-3.8"/><path d="M13.5 2.7v3.2h-3.2"/>',
 		close: '<path d="M4.4 4.4 11.6 11.6M11.6 4.4 4.4 11.6"/>',
 		"chevron-down": '<path d="M4.2 6.4 8 10.1l3.8-3.7"/>',
+		"chevron-up": '<path d="M4.2 9.6 8 5.9l3.8 3.7"/>',
 		"chevron-right": '<path d="M6.4 4.2 10.1 8l-3.7 3.8"/>',
 	};
 
@@ -76,6 +83,63 @@
 	// themes whose editor background is lighter than the side bar.
 	function paneBackground() {
 		return color("--vscode-sideBar-background", color("--vscode-editor-background", "#1e1e1e"));
+	}
+
+	// The palette VS Code's own terminal uses, read from the theme colors the webview exposes as CSS
+	// variables. Without this xterm falls back to its built-in ANSI colors and Pi's output looks
+	// nothing like the integrated terminal.
+	const ANSI_NAMES = [
+		"black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+		"brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite",
+	];
+
+	function xtermTheme() {
+		const foreground = color("--vscode-terminal-foreground", color("--vscode-foreground", "#cccccc"));
+		const background = paneBackground();
+		const theme = {
+			background,
+			foreground,
+			cursor: color("--vscode-terminalCursor-foreground", foreground),
+			cursorAccent: color("--vscode-terminalCursor-background", background),
+			selectionBackground: color("--vscode-terminal-selectionBackground", "#264f78"),
+			selectionInactiveBackground: color("--vscode-terminal-inactiveSelectionBackground", "") || undefined,
+			selectionForeground: color("--vscode-terminal-selectionForeground", "") || undefined,
+			scrollbarSliderBackground: color("--vscode-scrollbarSlider-background", "") || undefined,
+			scrollbarSliderHoverBackground: color("--vscode-scrollbarSlider-hoverBackground", "") || undefined,
+			scrollbarSliderActiveBackground: color("--vscode-scrollbarSlider-activeBackground", "") || undefined,
+		};
+		for (const name of ANSI_NAMES) {
+			const value = color(`--vscode-terminal-ansi${name[0].toUpperCase()}${name.slice(1)}`, "");
+			if (value) theme[name] = value;
+		}
+		return theme;
+	}
+
+	// Sent by the extension from terminal.integrated.* / editor.*; see src/xterm-options.ts.
+	let options = { xterm: {}, gpuAcceleration: "auto", unicodeVersion: "11", copyOnSelection: false, kittyKeyboard: true };
+
+	function applyOptions(term) {
+		// Assign key by key: a few options are constructor-only and xterm throws on those.
+		for (const [key, value] of Object.entries({ ...options.xterm, theme: xtermTheme() })) {
+			try {
+				term.options[key] = value;
+			} catch {
+				// Option not settable at runtime; it was applied at construction.
+			}
+		}
+		if (term.unicode) term.unicode.activeVersion = options.unicodeVersion;
+	}
+
+	function loadRenderer(term) {
+		if (options.gpuAcceleration === "off" || typeof WebglAddon === "undefined") return;
+		try {
+			const webgl = new WebglAddon.WebglAddon();
+			// Losing the GL context leaves a blank canvas, so drop back to the DOM renderer.
+			webgl.onContextLoss(() => webgl.dispose());
+			term.loadAddon(webgl);
+		} catch {
+			// No WebGL2 here; xterm keeps its DOM renderer.
+		}
 	}
 
 	let soundContext;
@@ -123,10 +187,6 @@
 		const entry = terminals.get(id);
 		if (!entry || entry.host.hidden) return;
 		entry.fit.fit();
-		// xterm sizes its scroll area from the viewport height it read at the last refresh.
-		// A refresh that lands while the host is display:none records 0 and leaves the scroll
-		// area one screen short, so the newest rows stay unreachable until output resumes.
-		entry.term._core.viewport?.syncScrollArea(true);
 		vscode.postMessage({ type: "resize", id, cols: entry.term.cols, rows: entry.term.rows });
 	}
 
@@ -140,21 +200,18 @@
 			host.hidden = true;
 			hosts.append(host);
 
-			const term = new Terminal({
-				cursorBlink: true,
-				fontFamily: color("--vscode-editor-font-family", "monospace"),
-				fontSize: 13,
-				theme: {
-					background: paneBackground(),
-					foreground: color("--vscode-terminal-foreground", color("--vscode-foreground", "#cccccc")),
-					cursor: color("--vscode-terminalCursor-foreground", "#aeafad"),
-					selectionBackground: color("--vscode-terminal-selectionBackground", "#264f78"),
-				},
-			});
+			const term = new Terminal({ ...options.xterm, theme: xtermTheme() });
 			const fit = new FitAddon.FitAddon();
 			term.loadAddon(fit);
+			if (typeof Unicode11Addon !== "undefined") {
+				term.loadAddon(new Unicode11Addon.Unicode11Addon());
+				term.unicode.activeVersion = options.unicodeVersion;
+			}
+			const search = typeof SearchAddon === "undefined" ? undefined : new SearchAddon.SearchAddon();
+			if (search) term.loadAddon(search);
 			registerTerminalLinks(term);
 			term.open(host);
+			loadRenderer(term);
 			// Pi hard-wraps Markdown to the terminal width and emits each row as a
 			// separate physical line, so xterm's copy would insert newlines at the wrap
 			// points. This runs after xterm's own copy handler (registered during open)
@@ -165,8 +222,26 @@
 				if (text !== undefined && event.clipboardData) event.clipboardData.setData("text/plain", text);
 			});
 			term.onData((data) => vscode.postMessage({ type: "input", id, data }));
+			term.onSelectionChange(() => {
+				if (!options.copyOnSelection || !term.hasSelection()) return;
+				const text = WrappedPathLinks.copySelectionText(term) ?? term.getSelection();
+				if (text) void navigator.clipboard?.writeText(text).catch(() => undefined);
+			});
+			term.attachCustomKeyEventHandler((event) => {
+				if (event.type !== "keydown") return true;
+				if (isFindShortcut(event)) {
+					openFind();
+					return false;
+				}
+				// With the Kitty keyboard protocol enabled xterm encodes Shift+Enter itself; without it a
+				// bare CR would submit instead of inserting a new line, so send the CSI u sequence pi expects.
+				if (options.kittyKeyboard || event.key !== "Enter") return true;
+				if (!event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return true;
+				vscode.postMessage({ type: "input", id, data: "\x1b[13;2u" });
+				return false;
+			});
 			host.addEventListener("mousedown", () => term.focus());
-			entry = { host, term, fit, sessionId, title, detached: false };
+			entry = { host, term, fit, search, sessionId, title, detached: false };
 			terminals.set(id, entry);
 		} else {
 			entry.sessionId = sessionId;
@@ -186,6 +261,7 @@
 		if (!selected) return;
 		selected.detached = false;
 		hosts.hidden = false;
+		closeFind();
 		activeId = id;
 		for (const [tabId, entry] of terminals) entry.host.hidden = tabId !== id;
 		vscode.postMessage({ type: "focus", id });
@@ -476,6 +552,66 @@
 		delete menu.dataset.owner;
 	}
 
+	// Cmd+F on macOS, Ctrl+Shift+F elsewhere: plain Ctrl+F stays with Pi, matching VS Code's terminal.
+	function isFindShortcut(event) {
+		if (event.key !== "f" && event.key !== "F") return false;
+		return event.metaKey ? !event.ctrlKey : event.ctrlKey && event.shiftKey;
+	}
+
+	function searchOptions(incremental) {
+		return {
+			incremental,
+			decorations: {
+				matchBackground: color("--vscode-terminal-findMatchHighlightBackground", "#ea5c0055"),
+				activeMatchBackground: color("--vscode-terminal-findMatchBackground", "#515c6a"),
+				matchOverviewRuler: color("--vscode-terminalOverviewRuler-findMatchForeground", "#d186167e"),
+				activeMatchColorOverviewRuler: color("--vscode-terminalOverviewRuler-findMatchForeground", "#d18616"),
+			},
+		};
+	}
+
+	function activeSearch() {
+		const entry = activeId && terminals.get(activeId);
+		return entry && !entry.detached ? entry.search : undefined;
+	}
+
+	function runFind(back, incremental) {
+		const search = activeSearch();
+		if (!search) return;
+		const term = findInput.value;
+		if (!term) {
+			search.clearDecorations();
+			findCount.textContent = "No results";
+			return;
+		}
+		if (back) search.findPrevious(term, searchOptions(false));
+		else search.findNext(term, searchOptions(incremental));
+	}
+
+	function openFind() {
+		const search = activeSearch();
+		if (!search) return;
+		if (!search.onResults) {
+			search.onResults = true;
+			search.onDidChangeResults(({ resultIndex, resultCount }) => {
+				findCount.textContent = resultCount ? `${resultIndex + 1} of ${resultCount}` : "No results";
+			});
+		}
+		const selection = terminals.get(activeId)?.term.getSelection();
+		if (selection && !selection.includes("\n")) findInput.value = selection;
+		find.hidden = false;
+		findInput.focus();
+		findInput.select();
+		runFind(false, true);
+	}
+
+	function closeFind() {
+		if (find.hidden) return;
+		find.hidden = true;
+		for (const entry of terminals.values()) entry.search?.clearDecorations();
+		terminals.get(activeId)?.term.focus();
+	}
+
 	function setSidebarVisible(visible) {
 		app.classList.toggle("sidebar-hidden", !visible);
 		sidebar.hidden = !visible;
@@ -515,6 +651,11 @@
 				break;
 			case "history":
 				renderSessions(message.sessions);
+				break;
+			case "options":
+				options = message.options;
+				for (const entry of terminals.values()) applyOptions(entry.term);
+				if (activeId) requestAnimationFrame(() => sendSize(activeId));
 				break;
 		}
 	});
@@ -577,6 +718,28 @@
 		unlockSound();
 		if (event.key === "Escape") hideMenu();
 	});
+
+	findPrev.append(icon("chevron-up"));
+	findNext.append(icon("chevron-down"));
+	findClose.append(icon("close"));
+	findInput.addEventListener("input", () => runFind(false, true));
+	findPrev.addEventListener("click", () => runFind(true, false));
+	findNext.addEventListener("click", () => runFind(false, false));
+	findClose.addEventListener("click", closeFind);
+	findInput.addEventListener("keydown", (event) => {
+		if (event.key === "Escape") closeFind();
+		else if (event.key === "Enter") runFind(event.shiftKey, false);
+		else return;
+		event.preventDefault();
+	});
+
+	// VS Code rewrites the theme CSS variables on the html element in place, with no event to listen to.
+	const themeObserver = new MutationObserver(() => {
+		for (const entry of terminals.values()) entry.term.options.theme = xtermTheme();
+	});
+	for (const node of [document.documentElement, document.body]) {
+		themeObserver.observe(node, { attributeFilter: ["class", "style"] });
+	}
 
 	new ResizeObserver(() => activeId && requestAnimationFrame(() => sendSize(activeId))).observe(hosts);
 	setInterval(() => renderSessions(), 60000);

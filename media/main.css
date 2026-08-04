@@ -244,6 +244,43 @@ body {
 	height: 100%;
 }
 
+#find {
+	position: absolute;
+	top: 0;
+	right: 18px;
+	z-index: 2;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 4px 4px 4px 6px;
+	border: 1px solid var(--vscode-widget-border, transparent);
+	border-top: none;
+	border-radius: 0 0 4px 4px;
+	background: var(--vscode-editorWidget-background);
+	color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+	box-shadow: 0 2px 8px var(--vscode-widget-shadow, transparent);
+}
+
+#find-input {
+	width: 140px;
+	padding: 2px 4px;
+	border: 1px solid var(--vscode-input-border, transparent);
+	background: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+	font: inherit;
+}
+
+#find-input:focus {
+	outline: 1px solid var(--vscode-focusBorder);
+}
+
+#find-count {
+	min-width: 62px;
+	opacity: 0.8;
+	font-size: 11px;
+	text-align: right;
+}
+
 #empty-state {
 	position: absolute;
 	inset: 0;
