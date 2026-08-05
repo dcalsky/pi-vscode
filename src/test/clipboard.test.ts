@@ -7,9 +7,10 @@ interface PiClipboard {
 		hasSelection: boolean,
 		context?: { isMac?: boolean; isLinux?: boolean; input?: boolean },
 	): string | null;
+	arrowAction(event: Record<string, unknown>, isMac?: boolean): string | null;
 }
 
-const { clipboardAction } = require("../../media/clipboard.js") as PiClipboard;
+const { clipboardAction, arrowAction } = require("../../media/clipboard.js") as PiClipboard;
 
 function key(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 	return { type: "keydown", key: "v", altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, ...overrides };
@@ -56,6 +57,19 @@ test("Inputs keep the browser convention on every platform", () => {
 	assert.equal(clipboardAction(key({ key: "c", ctrlKey: true }), true, linux), "copy");
 	assert.equal(clipboardAction(key({ key: "c", ctrlKey: true }), true, { isMac: false, input: true }), "copy");
 	assert.equal(clipboardAction(key({ key: "c", ctrlKey: true }), false, { input: true }), null);
+});
+
+test("macOS: Cmd+Left/Right send ^A/^E", () => {
+	assert.equal(arrowAction(key({ key: "ArrowLeft", metaKey: true }), true), "\x01");
+	assert.equal(arrowAction(key({ key: "ArrowRight", metaKey: true }), true), "\x05");
+});
+
+test("arrowAction: other platforms and modifier combos do nothing", () => {
+	assert.equal(arrowAction(key({ key: "ArrowLeft", metaKey: true }), false), null);
+	assert.equal(arrowAction(key({ key: "ArrowLeft" }), true), null);
+	assert.equal(arrowAction(key({ key: "ArrowLeft", metaKey: true, ctrlKey: true }), true), null);
+	assert.equal(arrowAction(key({ key: "ArrowLeft", metaKey: true, altKey: true }), true), null);
+	assert.equal(arrowAction({ ...key({ key: "ArrowLeft", metaKey: true }), type: "keyup" }, true), null);
 });
 
 test("Modifier combinations that must stay untouched", () => {

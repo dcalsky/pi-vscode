@@ -49,5 +49,15 @@
 		return null;
 	}
 
-	return { clipboardAction };
+	// macOS only, Terminal.app style: Cmd+Left/Right jump to the start/end of the line
+	// (^A/^E). The integrated terminal leaves Cmd+Arrows unbound, but the macOS shell
+	// convention is worth keeping.
+	function arrowAction(event, isMac = IS_MAC) {
+		if (event.type !== "keydown" || !isMac || !event.metaKey || event.ctrlKey || event.altKey) return null;
+		if (event.key === "ArrowLeft") return "\x01";
+		if (event.key === "ArrowRight") return "\x05";
+		return null;
+	}
+
+	return { clipboardAction, arrowAction };
 });

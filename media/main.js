@@ -233,6 +233,12 @@
 					openFind();
 					return false;
 				}
+				// Cmd+Left/Right on macOS: ^A/^E, Terminal.app style (see media/clipboard.js).
+				const arrow = PiClipboard.arrowAction(event);
+				if (arrow) {
+					vscode.postMessage({ type: "input", id, data: arrow });
+					return false;
+				}
 				// With the Kitty keyboard protocol enabled xterm encodes Shift+Enter itself; without it a
 				// bare CR would submit instead of inserting a new line, so send the CSI u sequence pi expects.
 				if (options.kittyKeyboard || event.key !== "Enter") return true;
