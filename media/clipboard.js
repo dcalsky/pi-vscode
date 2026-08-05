@@ -3,23 +3,49 @@
 // forwards it to the workbench, which only re-dispatches it for webview panels —
 // webview views never get it back. The context menu works because it runs
 // document.execCommand directly, so keyboard shortcuts take the same route here.
+//
+// The key table mirrors the integrated terminal's own keybindings
+// (workbench.action.terminal.copySelection / copyAndClearSelection / paste):
+//   macOS:   Cmd+C copies with a selection, Cmd+V pastes. Nothing else is bound.
+//   Windows: Ctrl+C copies (and clears) with a selection, Ctrl+Shift+C copies,
+//            Ctrl+V and Ctrl+Shift+V paste. Plain Ctrl+C without a selection is ^C.
+//   Linux:   Ctrl+Shift+C copies, Ctrl+Shift+V pastes; plain Ctrl+C stays ^C and
+//            plain Ctrl+V stays ^V, exactly like the integrated terminal.
+// Find/search inputs use the plain browser convention on every platform.
 (function (root, factory) {
 	const api = factory();
 	if (typeof module === "object" && module.exports) module.exports = api;
 	else root.PiClipboard = api;
 })(typeof globalThis === "object" ? globalThis : this, function () {
-	const IS_MAC = typeof navigator !== "undefined" && navigator.platform.toLowerCase().includes("mac");
+	const platform = (typeof navigator !== "undefined" && navigator.platform.toLowerCase()) || "";
+	const IS_MAC = platform.includes("mac");
+	const IS_LINUX = platform.includes("linux");
 
-	// Mirrors the integrated terminal: Cmd/Ctrl+C copies only with a selection
-	// (plain Ctrl+C without one still falls through to ^C), Cmd/Ctrl+V and
-	// Shift+Insert paste. Returns "copy" | "paste" | null.
-	function clipboardAction(event, hasSelection, isMac = IS_MAC) {
+	// Returns "copy" | "copyAndClear" | "paste" | null. `hasSelection` describes the
+	// focused terminal or input; `context.input` switches to browser conventions for
+	// the find/search fields.
+	function clipboardAction(event, hasSelection, context = {}) {
 		if (event.type !== "keydown" || event.altKey) return null;
+		const { isMac = IS_MAC, isLinux = IS_LINUX, input = false } = context;
 		const key = event.key.toLowerCase();
-		if (key === "v" && (isMac ? event.metaKey : event.ctrlKey)) return "paste";
-		if (key === "c" && !event.ctrlKey && event.metaKey && isMac && hasSelection) return "copy";
-		if (key === "c" && event.ctrlKey && !event.metaKey && !isMac && hasSelection) return "copy";
-		if (!isMac && event.key === "Insert" && event.shiftKey && !event.ctrlKey && !event.metaKey) return "paste";
+
+		if (key === "v") {
+			if (isMac) {
+				if (event.metaKey && !event.ctrlKey && !event.shiftKey) return "paste";
+			} else if (event.ctrlKey && !event.metaKey && (event.shiftKey || !isLinux || input)) {
+				// On Linux the integrated terminal only binds Ctrl+Shift+V; plain Ctrl+V is ^V.
+				return "paste";
+			}
+			return null;
+		}
+		if (key === "c" && hasSelection) {
+			if (isMac) {
+				if (event.metaKey && !event.ctrlKey && !event.shiftKey) return "copy";
+			} else if (event.ctrlKey && !event.metaKey && (event.shiftKey || !isLinux || input)) {
+				// Windows binds plain Ctrl+C to copyAndClearSelection; Ctrl+Shift+C only copies.
+				return !isLinux && !event.shiftKey && !input ? "copyAndClear" : "copy";
+			}
+		}
 		return null;
 	}
 

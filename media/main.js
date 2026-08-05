@@ -233,6 +233,12 @@
 					openFind();
 					return false;
 				}
+				// Cmd+Left/Right on macOS: ^A/^E like the integrated terminal (see media/clipboard.js).
+				const arrow = PiClipboard.arrowAction(event);
+				if (arrow) {
+					vscode.postMessage({ type: "input", id, data: arrow });
+					return false;
+				}
 				// With the Kitty keyboard protocol enabled xterm encodes Shift+Enter itself; without it a
 				// bare CR would submit instead of inserting a new line, so send the CSI u sequence pi expects.
 				if (options.kittyKeyboard || event.key !== "Enter") return true;
@@ -739,11 +745,17 @@
 			} else {
 				hasSelection = target.selectionStart !== target.selectionEnd;
 			}
-			const action = PiClipboard.clipboardAction(event, hasSelection);
+			const action = PiClipboard.clipboardAction(event, hasSelection, { input });
 			if (!action) return;
 			event.preventDefault();
 			event.stopPropagation();
-			document.execCommand(action);
+			if (action === "copyAndClear") {
+				document.execCommand("copy");
+				// Windows terminal behavior: Ctrl+C copies and clears the selection.
+				terminals.get(activeId)?.term.clearSelection();
+			} else {
+				document.execCommand(action);
+			}
 		},
 		true,
 	);
