@@ -2,8 +2,13 @@
   "name": "pi-coding",
   "displayName": "Pi Coding",
   "description": "Run pi coding-agent sessions in VS Code: several sessions side by side, live status for each one, and file paths that open in the editor.",
-  "version": "0.0.29",
+  "version": "0.0.31",
   "publisher": "EthanChow",
+  "icon": "logo.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dcalsky/pi-vscode.git"
+  },
   "license": "MIT",
   "engines": {
     "vscode": "^1.106.0"
