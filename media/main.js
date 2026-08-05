@@ -719,6 +719,35 @@
 		if (event.key === "Escape") hideMenu();
 	});
 
+	// VS Code's webview wrapper swallows native clipboard keydowns (see media/clipboard.js),
+	// so keyboard copy/paste runs the same document.execCommand route the context menu uses.
+	// The capture phase runs before the wrapper's own window listener, and stopPropagation
+	// keeps the wrapper from also forwarding the key to the workbench.
+	document.addEventListener(
+		"keydown",
+		(event) => {
+			const target = document.activeElement;
+			const xtermTextarea =
+				target instanceof HTMLElement && target.classList.contains("xterm-helper-textarea");
+			const input =
+				target instanceof HTMLInputElement || (target instanceof HTMLTextAreaElement && !xtermTextarea);
+			if (!xtermTextarea && !input) return;
+			let hasSelection = false;
+			if (xtermTextarea) {
+				const entry = activeId && terminals.get(activeId);
+				hasSelection = Boolean(entry && !entry.detached && entry.term.hasSelection());
+			} else {
+				hasSelection = target.selectionStart !== target.selectionEnd;
+			}
+			const action = PiClipboard.clipboardAction(event, hasSelection);
+			if (!action) return;
+			event.preventDefault();
+			event.stopPropagation();
+			document.execCommand(action);
+		},
+		true,
+	);
+
 	findPrev.append(icon("chevron-up"));
 	findNext.append(icon("chevron-down"));
 	findClose.append(icon("close"));

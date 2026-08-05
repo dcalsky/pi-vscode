@@ -37,6 +37,16 @@ Run [pi coding agent](https://pi.dev) sessions in VS Code. Each session is a rea
 
 Pi opens in the Secondary Side Bar, reopens the sessions that were open for that folder last time, and offers **New session** / **+** to start one.
 
+## Forking sessions
+
+[`pi-vscode-fork`](https://github.com/dcalsky/pi-vscode-fork) adds a `/fork-with-vscode` command that starts a new Pi session from any earlier user message in the current conversation — the new session keeps the history up to that message, opens as its own tab here, and gets the message pre-filled in its input box.
+
+```bash
+pi install npm:pi-vscode-fork
+```
+
+Restart the session after installing, then run `/fork-with-vscode` and pick the message to fork from.
+
 ## Configuration
 
 | Setting | Default | Description |

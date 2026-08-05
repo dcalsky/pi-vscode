@@ -801,6 +801,7 @@ function webviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string 
 	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-unicode11", "lib", "addon-unicode11.js")}"></script>
 	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-search", "lib", "addon-search.js")}"></script>
 	<script nonce="${nonce}" src="${uri("media", "wrapped-path-links.js")}"></script>
+	<script nonce="${nonce}" src="${uri("media", "clipboard.js")}"></script>
 	<script nonce="${nonce}" src="${uri("media", "session-view.js")}"></script>
 	<script nonce="${nonce}" src="${uri("media", "main.js")}"></script>
 </body>
