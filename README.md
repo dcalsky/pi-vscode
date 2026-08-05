@@ -2,13 +2,16 @@
 
 Run [pi coding agent](https://pi.dev) sessions in VS Code. Each session is a real terminal in a tab inside the Secondary Side Bar, with a session list beside it.
 
-![Pi for VS Code](snapshot1.jpg)
+![Pi for VS Code](images/snapshot1.jpg)
+![Fork dialog](images/fork.jpg)
+![Rewind dialog](images/rewind.jpg)
 
 ## Highlights
 
 - **Live status per session.** Each entry shows what Pi is doing: a spinning blue glyph while it works, green when it is waiting for your input, gray when it is stopped. No need to keep a terminal in view to know whether the agent is still going.
 - **Click paths to open files.** ⌘-click (Ctrl on Windows/Linux) any path Pi prints and it opens in the editor at the right line and column. Paths like `src/file.ts:12:3` and paths wrapped across two terminal rows work; copying wrapped text yields the path on a single line.
-- **Session management.** Browse every session for the current workspace in the list, grouped by `Today` / `Yesterday` / `Last 7 Days` / `Last 30 Days` / `Older` / `Archive`. Resume, fork, rewind, archive, close, or delete sessions from the list or the terminal tab's context menu. Open tabs are remembered per workspace and reopened next time.
+- **Session management.** Browse every session for the current workspace in the list, grouped by `Today` / `Yesterday` / `Last 7 Days` / `Last 30 Days` / `Older` / `Archive`. Resume, archive, close, or delete sessions from the list or the terminal tab's context menu. Open tabs are remembered per workspace and reopened next time.
+- **Fork and rewind sessions.** Right-click a session and pick **Fork** or **Rewind** to branch from, or go back to, any earlier user message. Fork opens the copy in a new tab; Rewind rewinds the session and restarts Pi with the message ready to re-send. Both are disabled while Pi is working. Rewind can also restore files to the state captured before the message — the checkpoint is a Git object in the transcript and never touches the real index; restoring files requires a Git repository.
 - **Audio cue.** A short tone plays when a session goes from working to waiting — so you can start a task, switch away, and get told when it is done or needs input.
 
 ## Session list
@@ -36,15 +39,6 @@ Run [pi coding agent](https://pi.dev) sessions in VS Code. Each session is a rea
 3. Click the Pi terminal icon in the editor's top-right toolbar (next to Run), or run **Pi: Open** from the Command Palette.
 
 Pi opens in the Secondary Side Bar, reopens the sessions that were open for that folder last time, and offers **New session** / **+** to start one.
-
-## Fork and Rewind
-
-Right-click a finished session in the list or its terminal tab:
-
-- **Fork** creates a sibling session from any earlier user message, opens it in a new tab, and leaves the selected message in the input box without submitting it.
-- **Rewind** moves the same session back before the selected user message and leaves that message unsubmitted. If files changed since that point, choose whether to keep the current files or restore the exact tracked and non-ignored file state captured before the message.
-
-Both actions are disabled while Pi is working. Rewind checkpoints use Git objects without changing the repository's real index.
 
 ## Configuration
 
