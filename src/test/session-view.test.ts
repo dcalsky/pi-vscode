@@ -17,6 +17,7 @@ interface SessionView {
 		options: { nowMs: number; query?: string },
 	): Array<{ title: string; sessions: SessionSummary[] }>;
 	sessionTimestamp(session: SessionSummary): number;
+	sessionActionAvailable(session: SessionSummary & { state?: string }): boolean;
 }
 
 const sessionView = require("../../media/session-view.js") as SessionView;
@@ -89,6 +90,14 @@ test("filters sessions by title, ignoring case and surrounding space", () => {
 	assert.deepEqual(flatIds(sessionView.groupSessions(sessions, { nowMs: now, query: "api" })), ["b"]);
 	assert.deepEqual(flatIds(sessionView.groupSessions(sessions, { nowMs: now, query: "   " })), ["a", "b"]);
 	assert.deepEqual(sessionView.groupSessions(sessions, { nowMs: now, query: "missing" }), []);
+});
+
+test("enables Fork and Rewind only after a session stops working", () => {
+	const summary = session("session", Date.now());
+	assert.equal(sessionView.sessionActionAvailable({ ...summary, state: "starting" }), false);
+	assert.equal(sessionView.sessionActionAvailable({ ...summary, state: "working" }), false);
+	assert.equal(sessionView.sessionActionAvailable({ ...summary, state: "idle" }), true);
+	assert.equal(sessionView.sessionActionAvailable({ ...summary, state: "inactive" }), true);
 });
 
 function session(id: string, updatedAtMs: number, title = id): SessionSummary {

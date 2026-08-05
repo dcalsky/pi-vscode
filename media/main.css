@@ -657,6 +657,174 @@ body {
 	outline: 0;
 }
 
+#menu button:disabled {
+	color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+	background: transparent;
+	opacity: 0.55;
+	cursor: default;
+}
+
+/* Fork / Rewind message picker */
+
+.dialog-scrim {
+	position: fixed;
+	inset: 0;
+	z-index: 20;
+	display: grid;
+	place-items: center;
+	padding: 24px;
+	background: rgb(0 0 0 / 45%);
+}
+
+.message-dialog-card {
+	display: grid;
+	grid-template-rows: auto minmax(96px, 1fr) auto;
+	width: min(560px, 100%);
+	max-height: min(620px, calc(100vh - 48px));
+	min-height: 240px;
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 8px;
+	color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	box-shadow: 0 12px 36px var(--vscode-widget-shadow, rgb(0 0 0 / 45%));
+	overflow: hidden;
+}
+
+.message-dialog-header {
+	padding: 16px 18px 12px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.message-dialog-header h2 {
+	margin: 0 0 5px;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.message-dialog-header p {
+	margin: 0;
+	color: var(--vscode-descriptionForeground);
+	font-size: 12px;
+}
+
+.message-dialog-list {
+	min-height: 0;
+	padding: 8px;
+	overflow-y: auto;
+}
+
+.message-dialog-list:hover::-webkit-scrollbar-thumb {
+	background: var(--vscode-scrollbarSlider-background, #79797966);
+}
+
+.message-dialog-list:hover::-webkit-scrollbar-thumb:hover {
+	background: var(--vscode-scrollbarSlider-hoverBackground, #646464b3);
+}
+
+.message-dialog-list:hover::-webkit-scrollbar-thumb:active {
+	background: var(--vscode-scrollbarSlider-activeBackground, #bfbfbf66);
+}
+
+.message-dialog-state {
+	margin: 12px 10px;
+	color: var(--vscode-descriptionForeground);
+	font-size: 12px;
+}
+
+.message-dialog-state.error {
+	color: var(--vscode-errorForeground);
+}
+
+.message-option {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	width: 100%;
+	margin: 0;
+	padding: 9px 10px;
+	border: 0;
+	border-radius: 5px;
+	color: var(--vscode-quickInput-foreground, var(--vscode-foreground));
+	background: transparent;
+	font: inherit;
+	font-size: 12px;
+	line-height: 1.45;
+	text-align: left;
+	cursor: pointer;
+}
+
+.message-option + .message-option {
+	margin-top: 2px;
+}
+
+.message-option:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
+.message-option.selected {
+	color: var(--vscode-list-activeSelectionForeground);
+	background: var(--vscode-list-activeSelectionBackground);
+}
+
+.message-radio {
+	flex: 0 0 13px;
+	width: 13px;
+	height: 13px;
+	margin-top: 2px;
+	border: 1px solid currentColor;
+	border-radius: 50%;
+	opacity: 0.7;
+}
+
+.message-option.selected .message-radio {
+	border: 4px solid currentColor;
+	opacity: 1;
+}
+
+.message-text {
+	min-width: 0;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.message-dialog-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	padding: 10px 12px;
+	border-top: 1px solid var(--vscode-panel-border);
+}
+
+.dialog-button {
+	min-width: 74px;
+	height: 28px;
+	padding: 0 12px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 4px;
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	background: var(--vscode-button-secondaryBackground, var(--vscode-toolbar-hoverBackground));
+	font: inherit;
+	cursor: pointer;
+}
+
+.dialog-button:hover {
+	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.dialog-button.primary {
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+}
+
+.dialog-button.primary:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+.dialog-button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.session-status.starting,
 	.session-status.working {

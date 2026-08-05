@@ -8,7 +8,7 @@ Run [pi coding agent](https://pi.dev) sessions in VS Code. Each session is a rea
 
 - **Live status per session.** Each entry shows what Pi is doing: a spinning blue glyph while it works, green when it is waiting for your input, gray when it is stopped. No need to keep a terminal in view to know whether the agent is still going.
 - **Click paths to open files.** ⌘-click (Ctrl on Windows/Linux) any path Pi prints and it opens in the editor at the right line and column. Paths like `src/file.ts:12:3` and paths wrapped across two terminal rows work; copying wrapped text yields the path on a single line.
-- **Session management.** Browse every session for the current workspace in the list, grouped by `Today` / `Yesterday` / `Last 7 Days` / `Last 30 Days` / `Older` / `Archive`. Resume, archive, close, or delete sessions from the list or the terminal tab's context menu. Open tabs are remembered per workspace and reopened next time.
+- **Session management.** Browse every session for the current workspace in the list, grouped by `Today` / `Yesterday` / `Last 7 Days` / `Last 30 Days` / `Older` / `Archive`. Resume, fork, rewind, archive, close, or delete sessions from the list or the terminal tab's context menu. Open tabs are remembered per workspace and reopened next time.
 - **Audio cue.** A short tone plays when a session goes from working to waiting — so you can start a task, switch away, and get told when it is done or needs input.
 
 ## Session list
@@ -37,15 +37,14 @@ Run [pi coding agent](https://pi.dev) sessions in VS Code. Each session is a rea
 
 Pi opens in the Secondary Side Bar, reopens the sessions that were open for that folder last time, and offers **New session** / **+** to start one.
 
-## Forking sessions
+## Fork and Rewind
 
-[`pi-vscode-fork`](https://github.com/dcalsky/pi-vscode-fork) adds a `/fork-with-vscode` command that starts a new Pi session from any earlier user message in the current conversation — the new session keeps the history up to that message, opens as its own tab here, and gets the message pre-filled in its input box.
+Right-click a finished session in the list or its terminal tab:
 
-```bash
-pi install npm:pi-vscode-fork
-```
+- **Fork** creates a sibling session from any earlier user message, opens it in a new tab, and leaves the selected message in the input box without submitting it.
+- **Rewind** moves the same session back before the selected user message and leaves that message unsubmitted. If files changed since that point, choose whether to keep the current files or restore the exact tracked and non-ignored file state captured before the message.
 
-Restart the session after installing, then run `/fork-with-vscode` and pick the message to fork from.
+Both actions are disabled while Pi is working. Rewind checkpoints use Git objects without changing the repository's real index.
 
 ## Configuration
 

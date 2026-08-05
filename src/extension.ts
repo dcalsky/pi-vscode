@@ -1,8 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, watch, type FSWatcher } from "node:fs";
+import { chmodSync, promises as fs, watch, type FSWatcher } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import * as pty from "node-pty";
 import * as vscode from "vscode";
+import {
+	createForkedSession,
+	createNativeDraftFile,
+	listSessionUserMessages,
+	prepareRewindSession,
+	removeNativeDraftFile,
+	resolveSessionSnapshot,
+	restoreWorktreeSnapshot,
+	rewriteSessionFile,
+	worktreeDiffersFromSnapshot,
+} from "./session-actions";
 import {
 	deleteSessionFiles,
 	listWorkspaceSessions,
@@ -27,6 +38,7 @@ interface RunningSession {
 	startedAtMs: number;
 	title: string;
 	path?: string;
+	leafId?: string;
 	/** False once its tab is closed: Pi keeps running, but the tab is not restored. */
 	attached: boolean;
 	process: pty.IPty;
@@ -34,8 +46,11 @@ interface RunningSession {
 
 interface StartSessionOptions {
 	draftFile?: string;
+	nativeDraftFile?: string;
 	reportError?: boolean;
 }
+
+type SessionHistoryAction = "fork" | "rewind";
 
 type ClientMessage =
 	| { type: "ready" }
@@ -51,6 +66,8 @@ type ClientMessage =
 	| { type: "shutdown"; id: string }
 	| { type: "delete"; id: string }
 	| { type: "archive"; id: string; archived: boolean }
+	| { type: "load-user-messages"; action: SessionHistoryAction; id: string; requestId: string }
+	| { type: "session-history-action"; action: SessionHistoryAction; id: string; entryId?: string }
 	| { type: "open-link"; kind: "file" | "url"; target: string };
 
 const PI_VIEW_ID = "piAgent.view";
@@ -58,6 +75,8 @@ const PI_CONTAINER_COMMAND = "workbench.view.extension.piAgent";
 const PI_CLOSE_SESSION_OR_VIEW_COMMAND = "piAgent.closeSessionOrView";
 const PI_VIEW_STATE_KEY = "piAgent.viewState";
 const PI_FORK_DRAFT_FILE_ENV = "PI_VSCODE_FORK_DRAFT_FILE";
+const PI_NATIVE_DRAFT_FILE_ENV = "PI_VSCODE_DRAFT_FILE";
+const SESSION_ACTION_DISABLED_MESSAGE = "Available until session is done";
 let ptyPrepared = false;
 let piViewProvider: PiViewProvider | undefined;
 
@@ -168,6 +187,8 @@ class PiPanel implements vscode.Disposable {
 	private readonly sessionStates = new Map<string, PiSessionState>();
 	private readonly statusSequences = new Map<string, { sourceId: string; seq: number }>();
 	private readonly historyWatchers = new Map<string, FSWatcher>();
+	private readonly replacingProcesses = new Set<pty.IPty>();
+	private readonly sessionActions = new Set<string>();
 	private readonly messageQueue: object[] = [];
 	private readonly pendingStarts: Array<{ id: string; sessionPath?: string; options?: StartSessionOptions }> = [];
 	private readonly statusBridge: PiStatusBridge;
@@ -268,6 +289,12 @@ class PiPanel implements vscode.Disposable {
 				break;
 			case "archive":
 				this.archiveSession(message.id, message.archived);
+				break;
+			case "load-user-messages":
+				await this.loadUserMessages(message.action, message.id, message.requestId);
+				break;
+			case "session-history-action":
+				await this.runSessionHistoryAction(message.action, message.id, message.entryId);
 				break;
 			case "focus":
 				this.setFocusedSession(message.id);
@@ -398,6 +425,154 @@ class PiPanel implements vscode.Disposable {
 		this.postHistory();
 	}
 
+	private async loadUserMessages(action: SessionHistoryAction, sessionId: string, requestId: string): Promise<void> {
+		try {
+			const source = this.sessionActionSource(sessionId);
+			this.assertSessionActionAvailable(source.open);
+			const messages = await listSessionUserMessages(source.path, source.open?.leafId);
+			this.post({ type: "user-messages", action, sessionId, requestId, messages });
+		} catch (error) {
+			this.post({ type: "user-messages", action, sessionId, requestId, error: errorMessage(error), messages: [] });
+		}
+	}
+
+	private async runSessionHistoryAction(
+		action: SessionHistoryAction,
+		sessionId: string,
+		entryId?: string,
+	): Promise<void> {
+		if (this.sessionActions.has(sessionId)) return;
+		this.sessionActions.add(sessionId);
+		try {
+			if (action === "fork") await this.forkSession(sessionId, entryId);
+			else await this.rewindSessionToMessage(sessionId, entryId!);
+		} catch (error) {
+			void vscode.window.showErrorMessage(`Could not ${action} session: ${errorMessage(error)}`);
+		} finally {
+			this.sessionActions.delete(sessionId);
+		}
+	}
+
+	private async forkSession(sessionId: string, entryId?: string): Promise<void> {
+		const source = this.sessionActionSource(sessionId);
+		this.assertSessionActionAvailable(source.open);
+		let forked: Awaited<ReturnType<typeof createForkedSession>> | undefined;
+		let draftFile: string | undefined;
+		try {
+			forked = await createForkedSession(source.path, entryId, source.title, source.open?.leafId);
+			if (forked.draft) draftFile = await createNativeDraftFile(forked.draft);
+			await this.refreshHistory();
+			const failure = this.startSession(forked.id, forked.path, { nativeDraftFile: draftFile, reportError: false });
+			if (failure) throw new Error(failure);
+		} catch (error) {
+			if (draftFile) await removeNativeDraftFile(draftFile).catch(() => undefined);
+			if (forked) await deleteSessionFiles(forked.path).catch(() => undefined);
+			await this.refreshHistory();
+			throw error;
+		}
+	}
+
+	private async rewindSessionToMessage(sessionId: string, entryId: string): Promise<void> {
+		let source = this.sessionActionSource(sessionId);
+		this.assertSessionActionAvailable(source.open);
+		let prepared = await prepareRewindSession(source.path, entryId, source.title, source.open?.leafId);
+		const snapshot = await resolveSessionSnapshot(source.path, entryId);
+		let revertCode = false;
+		if (snapshot && (await worktreeDiffersFromSnapshot(this.cwd, snapshot))) {
+			const choice = await vscode.window.showWarningMessage(
+				"Submit from a previous message?",
+				{
+					modal: true,
+					detail: "Submitting from a previous message will revert file changes to before this message and clear the messages after this one.",
+				},
+				"Don't Revert",
+				"Revert",
+			);
+			if (!choice || this.disposed) return;
+			revertCode = choice === "Revert";
+		}
+
+		// The user can submit from the terminal while the confirmation is open. Re-read
+		// and re-check immediately before stopping or rewriting the session.
+		source = this.sessionActionSource(sessionId);
+		this.assertSessionActionAvailable(source.open);
+		prepared = await prepareRewindSession(source.path, entryId, source.title, source.open?.leafId);
+		const originalContents = await fs.readFile(source.path, "utf8");
+		const draftFile = await createNativeDraftFile(prepared.draft);
+		const tabId = source.open?.tabId ?? sessionId;
+		let stopped = false;
+		let rewritten = false;
+		try {
+			if (source.open) {
+				await this.stopSessionForReplacement(source.open);
+				stopped = true;
+			}
+			if (revertCode && snapshot) await restoreWorktreeSnapshot(this.cwd, snapshot);
+			await rewriteSessionFile(source.path, prepared.contents);
+			rewritten = true;
+			await this.refreshHistory();
+			const failure = this.startSession(tabId, source.path, { nativeDraftFile: draftFile, reportError: false });
+			if (failure) throw new Error(failure);
+		} catch (error) {
+			await removeNativeDraftFile(draftFile).catch(() => undefined);
+			if (rewritten) await rewriteSessionFile(source.path, originalContents).catch(() => undefined);
+			const current = this.sessions.get(tabId);
+			if (stopped && (!current || current.process === source.open?.process)) {
+				this.startSession(tabId, source.path, { reportError: false });
+			} else if (!stopped && current?.process === source.open?.process) {
+				this.sessionStates.set(sessionId, "idle");
+				this.postHistory();
+			}
+			await this.refreshHistory();
+			throw error;
+		}
+	}
+
+	private sessionActionSource(sessionId: string): {
+		path: string;
+		title: string;
+		open: RunningSession | undefined;
+	} {
+		const open = this.openSessionFor(sessionId);
+		const saved = this.history.get(sessionId);
+		const path = saved?.path ?? open?.path;
+		if (!path) throw new Error("Send a message before using this action.");
+		return { path, title: saved?.title ?? open?.title ?? NEW_SESSION_TITLE, open };
+	}
+
+	private assertSessionActionAvailable(open: RunningSession | undefined): void {
+		if (!open || this.sessionStates.get(open.sessionId) === "idle") return;
+		throw new Error(SESSION_ACTION_DISABLED_MESSAGE);
+	}
+
+	private async stopSessionForReplacement(session: RunningSession): Promise<void> {
+		const process = session.process;
+		this.replacingProcesses.add(process);
+		this.sessionStates.set(session.sessionId, "starting");
+		this.postHistory();
+		await new Promise<void>((resolvePromise, reject) => {
+			let settled = false;
+			let timer: NodeJS.Timeout | undefined;
+			let listener: pty.IDisposable | undefined;
+			const finish = (error?: Error) => {
+				if (settled) return;
+				settled = true;
+				if (timer) clearTimeout(timer);
+				listener?.dispose();
+				this.replacingProcesses.delete(process);
+				if (error) reject(error);
+				else resolvePromise();
+			};
+			listener = process.onExit(() => finish());
+			timer = setTimeout(() => finish(new Error("Timed out while stopping the Pi session.")), 5_000);
+			try {
+				process.kill();
+			} catch (error) {
+				finish(error instanceof Error ? error : new Error(String(error)));
+			}
+		});
+	}
+
 	private setFocusedSession(tabId: string): void {
 		const session = this.sessions.get(tabId);
 		if (!session) return;
@@ -458,13 +633,17 @@ class PiPanel implements vscode.Disposable {
 			const tabId = id;
 			const args = sessionPath ? ["--session", sessionPath] : ["--session-id", id];
 			if (this.statusBridge.isListening) args.push("--extension", piStatusExtensionPath(this.extensionUri));
-			const forkEnvironment = options.draftFile ? { [PI_FORK_DRAFT_FILE_ENV]: options.draftFile } : {};
+			const draftEnvironment = options.nativeDraftFile
+				? { [PI_NATIVE_DRAFT_FILE_ENV]: options.nativeDraftFile }
+				: options.draftFile
+					? { [PI_FORK_DRAFT_FILE_ENV]: options.draftFile }
+					: {};
 			const process = pty.spawn(command, args, {
 				cwd: this.cwd,
 				name: "xterm-256color",
 				cols: this.cols,
 				rows: this.rows,
-				env: { ...terminalEnvironment(), ...this.statusBridge.environmentFor(tabId), ...forkEnvironment },
+				env: { ...terminalEnvironment(), ...this.statusBridge.environmentFor(tabId), ...draftEnvironment },
 			});
 			spawnedProcess = process;
 			const title = this.titleForSession(id);
@@ -502,6 +681,7 @@ class PiPanel implements vscode.Disposable {
 	}
 
 	private handleExit(tabId: string, process: pty.IPty, exitCode: number): void {
+		if (this.replacingProcesses.has(process)) return;
 		const session = this.sessions.get(tabId);
 		if (this.disposed || session?.process !== process) return;
 		this.sessions.delete(tabId);
@@ -551,6 +731,7 @@ class PiPanel implements vscode.Disposable {
 			session.path = report.sessionPath;
 			this.persistViewState();
 		}
+		session.leafId = report.leafId;
 		this.sessionStates.set(report.sessionId, report.state);
 		if (becameIdle(previousState, report.state)) this.post({ type: "attention" });
 		this.postHistory();
@@ -722,6 +903,21 @@ function isClientMessage(value: unknown): value is ClientMessage {
 		return typeof message.id === "string" && typeof message.cols === "number" && typeof message.rows === "number";
 	}
 	if (message.type === "archive") return typeof message.id === "string" && typeof message.archived === "boolean";
+	if (message.type === "load-user-messages") {
+		return (
+			isSessionHistoryAction(message.action) &&
+			nonEmptyBoundedString(message.id, 512) &&
+			nonEmptyBoundedString(message.requestId, 512)
+		);
+	}
+	if (message.type === "session-history-action") {
+		return (
+			isSessionHistoryAction(message.action) &&
+			nonEmptyBoundedString(message.id, 512) &&
+			(message.entryId === undefined || nonEmptyBoundedString(message.entryId, 512)) &&
+			(message.action !== "rewind" || nonEmptyBoundedString(message.entryId, 512))
+		);
+	}
 	if (message.type === "detach" || message.type === "shutdown" || message.type === "delete" || message.type === "focus") {
 		return typeof message.id === "string";
 	}
@@ -733,6 +929,14 @@ function isClientMessage(value: unknown): value is ClientMessage {
 		);
 	}
 	return message.type === "resume" && typeof message.id === "string";
+}
+
+function isSessionHistoryAction(value: unknown): value is SessionHistoryAction {
+	return value === "fork" || value === "rewind";
+}
+
+function nonEmptyBoundedString(value: unknown, maximumLength: number): value is string {
+	return typeof value === "string" && value.length > 0 && value.length <= maximumLength;
 }
 
 function webviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
@@ -794,6 +998,19 @@ function webviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string 
 		</aside>
 	</div>
 	<div id="menu" role="menu" hidden></div>
+	<div id="message-dialog" class="dialog-scrim" hidden>
+		<section class="message-dialog-card" role="dialog" aria-modal="true" aria-labelledby="message-dialog-title" aria-describedby="message-dialog-description">
+			<header class="message-dialog-header">
+				<h2 id="message-dialog-title"></h2>
+				<p id="message-dialog-description"></p>
+			</header>
+			<div id="message-dialog-list" class="message-dialog-list" role="radiogroup" aria-label="User messages"></div>
+			<footer class="message-dialog-footer">
+				<button id="message-dialog-cancel" class="dialog-button" type="button">Cancel</button>
+				<button id="message-dialog-submit" class="dialog-button primary" type="button" disabled></button>
+			</footer>
+		</section>
+	</div>
 	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "xterm", "lib", "xterm.js")}"></script>
 	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js")}"></script>
 	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-web-links", "lib", "addon-web-links.js")}"></script>

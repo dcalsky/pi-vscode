@@ -21,6 +21,7 @@ test("relays only token-authenticated Pi status reports", async () => {
 		token: environment.PI_VSCODE_STATUS_TOKEN,
 		tabId: "tab-1",
 		sessionId: "session-1",
+		leafId: "leaf-1",
 		state: "working",
 		sourceId: "test",
 		seq: 1,
@@ -30,6 +31,7 @@ test("relays only token-authenticated Pi status reports", async () => {
 		{
 			tabId: "tab-1",
 			sessionId: "session-1",
+			leafId: "leaf-1",
 			state: "working",
 			sourceId: "test",
 			seq: 1,

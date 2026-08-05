@@ -49,6 +49,11 @@
 		return String((session && session.title) || "").toLowerCase().includes(needle);
 	}
 
+	function sessionActionAvailable(session) {
+		const state = session && session.state;
+		return state !== "starting" && state !== "working";
+	}
+
 	function groupSessions(sessions, options) {
 		const settings = options || {};
 		const nowMs = Number.isFinite(settings.nowMs) ? settings.nowMs : 0;
@@ -70,5 +75,5 @@
 			.map((title) => ({ title, sessions: buckets.get(title) }));
 	}
 
-	return { ARCHIVE_GROUP, formatAge, groupSessions, matchesQuery, recencyGroup, sessionTimestamp };
+	return { ARCHIVE_GROUP, formatAge, groupSessions, matchesQuery, recencyGroup, sessionActionAvailable, sessionTimestamp };
 });

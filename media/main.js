@@ -22,6 +22,12 @@
 	const findPrev = document.getElementById("find-prev");
 	const findNext = document.getElementById("find-next");
 	const findClose = document.getElementById("find-close");
+	const messageDialog = document.getElementById("message-dialog");
+	const messageDialogTitle = document.getElementById("message-dialog-title");
+	const messageDialogDescription = document.getElementById("message-dialog-description");
+	const messageDialogList = document.getElementById("message-dialog-list");
+	const messageDialogCancel = document.getElementById("message-dialog-cancel");
+	const messageDialogSubmit = document.getElementById("message-dialog-submit");
 
 	const terminals = new Map();
 	const expandedGroups = new Set();
@@ -29,8 +35,11 @@
 	const GROUP_PREVIEW_COUNT = 6;
 	const STOP_LABEL = "Stop Pi";
 	const DELETE_HINT = "Stop Pi and delete this session from disk";
+	const SESSION_ACTION_DISABLED_HINT = "Available until session is done";
 	let activeId;
 	let historySessions = [];
+	let messageDialogState;
+	let messageRequestSequence = 0;
 
 	const statusLabels = {
 		inactive: "Not open",
@@ -333,6 +342,137 @@
 		vscode.postMessage({ type: "delete", id: sessionId });
 	}
 
+	function sessionSummaryForTerminal(id) {
+		const entry = terminals.get(id);
+		if (!entry) return undefined;
+		return (
+			historySessions.find((session) => session.id === entry.sessionId) || {
+				id: entry.sessionId,
+				title: entry.title,
+				state: "starting",
+			}
+		);
+	}
+
+	function sessionHistoryActionItems(session) {
+		if (!session) return [];
+		const available = PiSessionView.sessionActionAvailable(session);
+		const hint = available ? undefined : SESSION_ACTION_DISABLED_HINT;
+		return [
+			{ label: "Fork", hint, disabled: !available, run: () => openMessageDialog("fork", session) },
+			{ label: "Rewind", hint, disabled: !available, run: () => openMessageDialog("rewind", session) },
+		];
+	}
+
+	function openMessageDialog(action, session) {
+		if (!PiSessionView.sessionActionAvailable(session)) return;
+		const requestId = `messages-${++messageRequestSequence}`;
+		messageDialogState = { action, sessionId: session.id, requestId, selectedId: undefined, wholeSession: false, messages: [] };
+		messageDialogTitle.textContent = action === "fork" ? "Fork Session" : "Rewind Session";
+		messageDialogDescription.textContent =
+			action === "fork"
+				? `Fork the whole session, or select a user message from “${session.title}”.`
+				: `Select a user message from “${session.title}”.`;
+		messageDialogSubmit.textContent = action === "fork" ? "Fork" : "Rewind";
+		messageDialogSubmit.disabled = true;
+		setMessageDialogState("Loading user messages…");
+		messageDialog.hidden = false;
+		messageDialogCancel.focus();
+		vscode.postMessage({ type: "load-user-messages", action, id: session.id, requestId });
+	}
+
+	function setMessageDialogState(text, error = false) {
+		const state = document.createElement("p");
+		state.className = `message-dialog-state${error ? " error" : ""}`;
+		state.textContent = text;
+		messageDialogList.replaceChildren(state);
+	}
+
+	function renderMessageDialogMessages(message) {
+		const state = messageDialogState;
+		if (!state || state.requestId !== message.requestId || state.sessionId !== message.sessionId || state.action !== message.action) {
+			return;
+		}
+		if (message.error) {
+			state.selectedId = undefined;
+			state.wholeSession = false;
+			messageDialogSubmit.disabled = true;
+			setMessageDialogState(message.error, true);
+			return;
+		}
+		state.messages = Array.isArray(message.messages) ? message.messages : [];
+		if (!state.messages.length) {
+			state.selectedId = undefined;
+			state.wholeSession = false;
+			messageDialogSubmit.disabled = true;
+			setMessageDialogState("No user messages are available in this session.");
+			return;
+		}
+		if (!state.messages.some((entry) => entry.id === state.selectedId)) {
+			state.selectedId = state.messages.at(-1)?.id;
+		}
+		messageDialogList.replaceChildren();
+		if (state.action === "fork") {
+			messageDialogList.append(messageDialogOption(state, { wholeSession: true, text: "Whole Session" }));
+		}
+		for (const entry of state.messages) {
+			messageDialogList.append(messageDialogOption(state, { entryId: entry.id, text: entry.text }));
+		}
+		messageDialogSubmit.disabled = !state.selectedId && !state.wholeSession;
+		const selectedOption = messageDialogList.querySelector(".message-option.selected");
+		selectedOption?.focus();
+		selectedOption?.scrollIntoView({ block: "nearest" });
+	}
+
+	function messageDialogOption(state, { entryId, wholeSession, text }) {
+		const selected = wholeSession ? state.wholeSession : entryId === state.selectedId;
+		const option = document.createElement("button");
+		option.type = "button";
+		option.className = `message-option${selected ? " selected" : ""}`;
+		if (wholeSession) option.dataset.wholeSession = "true";
+		else option.dataset.entryId = entryId;
+		option.setAttribute("role", "radio");
+		option.setAttribute("aria-checked", String(selected));
+		const radio = document.createElement("span");
+		radio.className = "message-radio";
+		radio.setAttribute("aria-hidden", "true");
+		const label = document.createElement("span");
+		label.className = "message-text";
+		label.textContent = text;
+		option.append(radio, label);
+		option.addEventListener("click", () => selectMessageDialogOption(state, option));
+		return option;
+	}
+
+	function selectMessageDialogOption(state, option) {
+		state.selectedId = option.dataset.entryId || undefined;
+		state.wholeSession = Boolean(option.dataset.wholeSession);
+		for (const candidate of messageDialogList.querySelectorAll(".message-option")) {
+			const isSelected = candidate === option;
+			candidate.classList.toggle("selected", isSelected);
+			candidate.setAttribute("aria-checked", String(isSelected));
+		}
+		messageDialogSubmit.disabled = false;
+	}
+
+	function closeMessageDialog() {
+		messageDialog.hidden = true;
+		messageDialogList.replaceChildren();
+		messageDialogState = undefined;
+	}
+
+	function submitMessageDialog() {
+		const state = messageDialogState;
+		if (!state || (!state.selectedId && !state.wholeSession)) return;
+		vscode.postMessage({
+			type: "session-history-action",
+			action: state.action,
+			id: state.sessionId,
+			...(!state.wholeSession && { entryId: state.selectedId }),
+		});
+		closeMessageDialog();
+	}
+
 	function closeActiveSessionOrView() {
 		const active = activeId && terminals.get(activeId);
 		if (active && !active.detached) {
@@ -389,6 +529,7 @@
 		return [
 			{ label: "Close", hint: "Close this tab; Pi keeps running", run: () => closeTerminal(id) },
 			{ label: STOP_LABEL, hint: "Stop the Pi process and close this tab", run: () => shutdownTerminal(id) },
+			...sessionHistoryActionItems(sessionSummaryForTerminal(id)),
 			{ label: "Archive", hint: "File this session under Archive", run: () => archiveTerminal(id) },
 			{ label: "Delete", hint: DELETE_HINT, run: () => deleteSession(terminals.get(id)?.sessionId) },
 		];
@@ -514,6 +655,7 @@
 					run: () => shutdownTerminal(session.tabId),
 				});
 			}
+			items.push(...sessionHistoryActionItems(session));
 			items.push({
 				label: archived ? "Restore" : "Archive",
 				hint: archived ? "Move this session back to its date group" : "File this session under Archive",
@@ -539,7 +681,9 @@
 			button.setAttribute("role", "menuitem");
 			button.textContent = item.label;
 			if (item.hint) button.title = item.hint;
+			button.disabled = Boolean(item.disabled);
 			button.addEventListener("click", () => {
+				if (item.disabled) return;
 				hideMenu();
 				item.run();
 			});
@@ -549,7 +693,7 @@
 		const { width, height } = menu.getBoundingClientRect();
 		menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - width - 4))}px`;
 		menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - height - 4))}px`;
-		menu.querySelector("button")?.focus();
+		menu.querySelector("button:not(:disabled)")?.focus();
 	}
 
 	function hideMenu() {
@@ -658,6 +802,9 @@
 			case "history":
 				renderSessions(message.sessions);
 				break;
+			case "user-messages":
+				renderMessageDialogMessages(message);
+				break;
 			case "options":
 				options = message.options;
 				for (const entry of terminals.values()) applyOptions(entry.term);
@@ -684,6 +831,11 @@
 	hideSidebar.addEventListener("click", () => setSidebarVisible(false));
 	showSidebar.addEventListener("click", () => setSidebarVisible(true));
 	search.addEventListener("input", () => renderSessions());
+	messageDialogCancel.addEventListener("click", closeMessageDialog);
+	messageDialogSubmit.addEventListener("click", submitMessageDialog);
+	messageDialog.addEventListener("pointerdown", (event) => {
+		if (event.target === messageDialog) closeMessageDialog();
+	});
 	tabMenu.addEventListener("click", (event) => {
 		event.stopPropagation();
 		// A second click on the button closes the menu it opened.
@@ -697,6 +849,7 @@
 			{ label: "Refresh sessions", run: () => vscode.postMessage({ type: "refresh" }) },
 		];
 		if (activeId && terminals.has(activeId)) {
+			items.push(...sessionHistoryActionItems(sessionSummaryForTerminal(activeId)));
 			items.push({ label: "Archive session", run: () => archiveTerminal(activeId) });
 			items.push({ label: "Close session", hint: "Pi keeps running", run: () => closeTerminal(activeId) });
 			items.push({ label: `${STOP_LABEL} for this session`, run: () => shutdownTerminal(activeId) });
@@ -722,7 +875,13 @@
 	});
 	document.addEventListener("keydown", (event) => {
 		unlockSound();
-		if (event.key === "Escape") hideMenu();
+		if (event.key !== "Escape") return;
+		if (!messageDialog.hidden) {
+			closeMessageDialog();
+			event.preventDefault();
+			return;
+		}
+		hideMenu();
 	});
 
 	// VS Code's webview wrapper swallows native clipboard keydowns (see media/clipboard.js),

@@ -11,6 +11,7 @@ export interface PiStatusReport {
 	tabId: string;
 	sessionId: string;
 	sessionPath?: string;
+	leafId?: string;
 	state: ReportedState;
 	sourceId: string;
 	seq: number;
@@ -145,6 +146,7 @@ export class PiStatusBridge {
 					tabId: message.tabId,
 					sessionId: message.sessionId,
 					sessionPath: message.sessionPath,
+					leafId: message.leafId,
 					state: message.state,
 					sourceId: message.sourceId,
 					seq: message.seq,
@@ -211,6 +213,7 @@ function isWireStatusReport(value: unknown): value is WireStatusReport {
 		typeof report.tabId === "string" &&
 		typeof report.sessionId === "string" &&
 		(report.sessionPath === undefined || typeof report.sessionPath === "string") &&
+		(report.leafId === undefined || typeof report.leafId === "string") &&
 		typeof report.sourceId === "string" &&
 		Number.isSafeInteger(report.seq) &&
 		(report.seq as number) > 0 &&
