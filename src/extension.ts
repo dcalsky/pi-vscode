@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, watch, type FSWatcher } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import * as pty from "node-pty";
 import * as vscode from "vscode";
 import {
@@ -10,7 +10,13 @@ import {
 	sessionDirectoriesForWorkspace,
 	type PiSession,
 } from "./session-store";
-import { becameIdle, PiStatusBridge, type PiSessionState, type PiStatusReport } from "./status-bridge";
+import {
+	becameIdle,
+	PiStatusBridge,
+	type PiForkRequest,
+	type PiSessionState,
+	type PiStatusReport,
+} from "./status-bridge";
 import { httpUrl, resolveFileLink } from "./terminal-links";
 import { normalizeViewState, setArchived, type PiViewState } from "./view-state";
 import { terminalOptions } from "./xterm-options";
@@ -24,6 +30,11 @@ interface RunningSession {
 	/** False once its tab is closed: Pi keeps running, but the tab is not restored. */
 	attached: boolean;
 	process: pty.IPty;
+}
+
+interface StartSessionOptions {
+	draftFile?: string;
+	reportError?: boolean;
 }
 
 type ClientMessage =
@@ -46,6 +57,7 @@ const PI_VIEW_ID = "piAgent.view";
 const PI_CONTAINER_COMMAND = "workbench.view.extension.piAgent";
 const PI_CLOSE_SESSION_OR_VIEW_COMMAND = "piAgent.closeSessionOrView";
 const PI_VIEW_STATE_KEY = "piAgent.viewState";
+const PI_FORK_DRAFT_FILE_ENV = "PI_VSCODE_FORK_DRAFT_FILE";
 let ptyPrepared = false;
 let piViewProvider: PiViewProvider | undefined;
 
@@ -157,7 +169,7 @@ class PiPanel implements vscode.Disposable {
 	private readonly statusSequences = new Map<string, { sourceId: string; seq: number }>();
 	private readonly historyWatchers = new Map<string, FSWatcher>();
 	private readonly messageQueue: object[] = [];
-	private readonly pendingStarts: Array<{ id: string; sessionPath?: string }> = [];
+	private readonly pendingStarts: Array<{ id: string; sessionPath?: string; options?: StartSessionOptions }> = [];
 	private readonly statusBridge: PiStatusBridge;
 	private viewState: PiViewState;
 	private refreshTimer: NodeJS.Timeout | undefined;
@@ -176,7 +188,10 @@ class PiPanel implements vscode.Disposable {
 		private readonly onDispose: () => void,
 	) {
 		this.viewState = normalizeViewState(this.memento.get(PI_VIEW_STATE_KEY));
-		this.statusBridge = new PiStatusBridge((report) => this.handleStatusReport(report));
+		this.statusBridge = new PiStatusBridge(
+			(report) => this.handleStatusReport(report),
+			(request) => this.handleForkRequest(request),
+		);
 		this.panel.webview.options = {
 			enableScripts: true,
 			localResourceRoots: [
@@ -206,7 +221,9 @@ class PiPanel implements vscode.Disposable {
 				this.statusBridgeReady = true;
 				if (this.disposed) return;
 				this.restoreSessions();
-				for (const pending of this.pendingStarts.splice(0)) this.startSession(pending.id, pending.sessionPath);
+				for (const pending of this.pendingStarts.splice(0)) {
+					this.startSession(pending.id, pending.sessionPath, pending.options);
+				}
 			});
 	}
 
@@ -399,29 +416,57 @@ class PiPanel implements vscode.Disposable {
 		void this.memento.update(PI_VIEW_STATE_KEY, this.viewState);
 	}
 
-	private startSession(id: string, sessionPath?: string): void {
+	private async handleForkRequest(request: PiForkRequest): Promise<void> {
+		if (this.disposed) throw new Error("The Pi view is closed");
+		const source = this.sessions.get(request.tabId);
+		if (!source || source.sessionId !== request.sourceSessionId) {
+			throw new Error("The source session is no longer open");
+		}
+		if (request.sessionId === request.sourceSessionId || this.openSessionFor(request.sessionId)) {
+			throw new Error("The forked session is already open");
+		}
+
+		await this.refreshHistory();
+		if (this.disposed) throw new Error("The Pi view is closed");
+		const forked = this.history.get(request.sessionId);
+		if (!forked || resolve(forked.path) !== resolve(request.sessionPath)) {
+			throw new Error("The forked session is not available in this workspace");
+		}
+
+		const failure = this.startSession(request.sessionId, forked.path, {
+			draftFile: request.draftFile,
+			reportError: false,
+		});
+		if (failure) throw new Error(failure);
+	}
+
+	private startSession(id: string, sessionPath?: string, options: StartSessionOptions = {}): string | undefined {
 		if (!this.statusBridgeReady) {
-			this.pendingStarts.push({ id, sessionPath });
-			return;
+			this.pendingStarts.push({ id, sessionPath, options });
+			return undefined;
 		}
 		const command = vscode.workspace.getConfiguration("piAgent").get<string>("command", "pi").trim();
 		if (!command) {
-			void vscode.window.showErrorMessage("Set piAgent.command to the pi executable.");
-			return;
+			const failure = "Set piAgent.command to the pi executable.";
+			if (options.reportError !== false) void vscode.window.showErrorMessage(failure);
+			return failure;
 		}
 
+		let spawnedProcess: pty.IPty | undefined;
 		try {
 			preparePty();
 			const tabId = id;
 			const args = sessionPath ? ["--session", sessionPath] : ["--session-id", id];
 			if (this.statusBridge.isListening) args.push("--extension", piStatusExtensionPath(this.extensionUri));
+			const forkEnvironment = options.draftFile ? { [PI_FORK_DRAFT_FILE_ENV]: options.draftFile } : {};
 			const process = pty.spawn(command, args, {
 				cwd: this.cwd,
 				name: "xterm-256color",
 				cols: this.cols,
 				rows: this.rows,
-				env: { ...terminalEnvironment(), ...this.statusBridge.environmentFor(tabId) },
+				env: { ...terminalEnvironment(), ...this.statusBridge.environmentFor(tabId), ...forkEnvironment },
 			});
+			spawnedProcess = process;
 			const title = this.titleForSession(id);
 			const session: RunningSession = {
 				tabId,
@@ -444,8 +489,15 @@ class PiPanel implements vscode.Disposable {
 			this.persistViewState();
 			this.postHistory();
 			this.refreshSoon();
+			return undefined;
 		} catch (error) {
-			void vscode.window.showErrorMessage(`Could not start pi: ${errorMessage(error)}`);
+			this.sessions.delete(id);
+			this.sessionStates.delete(id);
+			this.statusSequences.delete(id);
+			spawnedProcess?.kill();
+			const failure = `Could not start pi: ${errorMessage(error)}`;
+			if (options.reportError !== false) void vscode.window.showErrorMessage(failure);
+			return failure;
 		}
 	}
 

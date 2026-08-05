@@ -16,8 +16,22 @@ export interface PiStatusReport {
 	seq: number;
 }
 
+export interface PiForkRequest {
+	requestId: string;
+	tabId: string;
+	sourceSessionId: string;
+	sessionId: string;
+	sessionPath: string;
+	draftFile: string;
+}
+
 interface WireStatusReport extends PiStatusReport {
 	type: "pi-vscode-status";
+	token: string;
+}
+
+interface WireForkRequest extends PiForkRequest {
+	type: "pi-vscode-fork";
 	token: string;
 }
 
@@ -36,7 +50,10 @@ export class PiStatusBridge {
 	private listening = false;
 	private disposed = false;
 
-	constructor(private readonly onReport: (report: PiStatusReport) => void) {}
+	constructor(
+		private readonly onReport: (report: PiStatusReport) => void,
+		private readonly onForkRequest?: (request: PiForkRequest) => void | Promise<void>,
+	) {}
 
 	get isListening(): boolean {
 		return this.listening;
@@ -100,12 +117,14 @@ export class PiStatusBridge {
 	private handleConnection(socket: Socket): void {
 		this.sockets.add(socket);
 		socket.setEncoding("utf8");
-		socket.setTimeout(5000, () => socket.destroy());
+		socket.setTimeout(10_000, () => socket.destroy());
 		socket.on("error", () => undefined);
 		socket.once("close", () => this.sockets.delete(socket));
 
 		let pending = "";
+		let handled = false;
 		socket.on("data", (chunk: string) => {
+			if (handled) return;
 			pending += chunk;
 			if (Buffer.byteLength(pending) > MAX_MESSAGE_BYTES) {
 				socket.destroy();
@@ -113,25 +132,58 @@ export class PiStatusBridge {
 			}
 			const newline = pending.indexOf("\n");
 			if (newline < 0) return;
-			this.handleLine(pending.slice(0, newline));
-			socket.end();
+			handled = true;
+			void this.handleLine(pending.slice(0, newline), socket);
 		});
 	}
 
-	private handleLine(line: string): void {
+	private async handleLine(line: string, socket: Socket): Promise<void> {
 		try {
-			const report = JSON.parse(line) as unknown;
-			if (!isWireStatusReport(report) || report.token !== this.token) return;
-			this.onReport({
-				tabId: report.tabId,
-				sessionId: report.sessionId,
-				sessionPath: report.sessionPath,
-				state: report.state,
-				sourceId: report.sourceId,
-				seq: report.seq,
-			});
+			const message = JSON.parse(line) as unknown;
+			if (isWireStatusReport(message) && message.token === this.token) {
+				this.onReport({
+					tabId: message.tabId,
+					sessionId: message.sessionId,
+					sessionPath: message.sessionPath,
+					state: message.state,
+					sourceId: message.sourceId,
+					seq: message.seq,
+				});
+				socket.end();
+				return;
+			}
+
+			if (!isWireForkRequest(message) || message.token !== this.token) {
+				socket.end();
+				return;
+			}
+
+			try {
+				if (!this.onForkRequest) throw new Error("Fork requests are unavailable");
+				await this.onForkRequest({
+					requestId: message.requestId,
+					tabId: message.tabId,
+					sourceSessionId: message.sourceSessionId,
+					sessionId: message.sessionId,
+					sessionPath: message.sessionPath,
+					draftFile: message.draftFile,
+				});
+				socket.end(
+					`${JSON.stringify({ type: "pi-vscode-fork-result", requestId: message.requestId, ok: true })}\n`,
+				);
+			} catch (error) {
+				socket.end(
+					`${JSON.stringify({
+						type: "pi-vscode-fork-result",
+						requestId: message.requestId,
+						ok: false,
+						error: errorMessage(error),
+					})}\n`,
+				);
+			}
 		} catch {
 			// Ignore malformed local messages.
+			socket.end();
 		}
 	}
 
@@ -165,4 +217,27 @@ function isWireStatusReport(value: unknown): value is WireStatusReport {
 		typeof report.state === "string" &&
 		REPORTED_STATES.has(report.state as ReportedState)
 	);
+}
+
+function isWireForkRequest(value: unknown): value is WireForkRequest {
+	if (!value || typeof value !== "object") return false;
+	const request = value as Record<string, unknown>;
+	return (
+		request.type === "pi-vscode-fork" &&
+		nonEmptyString(request.token) &&
+		nonEmptyString(request.requestId) &&
+		nonEmptyString(request.tabId) &&
+		nonEmptyString(request.sourceSessionId) &&
+		nonEmptyString(request.sessionId) &&
+		nonEmptyString(request.sessionPath) &&
+		nonEmptyString(request.draftFile)
+	);
+}
+
+function nonEmptyString(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0;
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
