@@ -577,10 +577,37 @@
 		];
 	}
 
+	let sessionRenderSignature = "";
+
+	// The extension pushes history on every output burst (500ms debounce); rebuilding the
+	// list then recreates the spinner element and its CSS animation restarts, which reads
+	// as jank. Rebuild only when the rendered content actually changed.
+	function sessionSignature(groups, nowMs) {
+		const parts = [search.value.trim(), String(activeId)];
+		for (const group of groups) {
+			parts.push(group.title, collapsedGroups.has(group.title), expandedGroups.has(group.title));
+			for (const session of group.sessions) {
+				parts.push(
+					session.id,
+					normalizedState(session.state),
+					session.title,
+					Boolean(session.archived),
+					String(session.tabId),
+					PiSessionView.formatAge(PiSessionView.sessionTimestamp(session), nowMs),
+				);
+			}
+		}
+		return parts.join("\u0000");
+	}
+
 	function renderSessions(sessions) {
 		if (sessions) historySessions = sessions;
+		const nowMs = Date.now();
+		const groups = PiSessionView.groupSessions(historySessions, { nowMs, query: search.value });
+		const signature = sessionSignature(groups, nowMs);
+		if (signature === sessionRenderSignature) return;
+		sessionRenderSignature = signature;
 		sessionList.replaceChildren();
-		const groups = PiSessionView.groupSessions(historySessions, { nowMs: Date.now(), query: search.value });
 		if (!groups.length) {
 			const empty = document.createElement("p");
 			empty.className = "list-empty";
