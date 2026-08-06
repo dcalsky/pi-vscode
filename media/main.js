@@ -240,8 +240,33 @@
 				const text = WrappedPathLinks.copySelectionText(term) ?? term.getSelection();
 				if (text) void navigator.clipboard?.writeText(text).catch(() => undefined);
 			});
+			// See media/ime.js: unmodified punctuation/digit keydowns go through the browser's
+			// native text input so a third-party IME's committed Chinese punctuation lands in
+			// xterm's hidden textarea; this capture-phase listener forwards it to the PTY.
+			// `pendingNativeInput` is set on the keydown and cancelled by the keypress of a
+			// plain ASCII key, which xterm's own _keyPress sends as before, so English typing
+			// is unchanged. (xterm's own input listener only forwards insertText when no
+			// keydown is in flight, so a commit arriving after keyup is still delivered once.)
+			let pendingNativeInput = false;
+			term.textarea.addEventListener(
+				"input",
+				(event) => {
+					if (!pendingNativeInput) return;
+					pendingNativeInput = false;
+					if (event.isComposing || !event.data) return;
+					vscode.postMessage({ type: "input", id, data: event.data });
+				},
+				true,
+			);
 			term.attachCustomKeyEventHandler((event) => {
-				if (event.type !== "keydown") return true;
+				if (event.type !== "keydown") {
+					pendingNativeInput = false;
+					return true;
+				}
+				if (PiIme.nativeInputKey(event)) {
+					pendingNativeInput = true;
+					return false;
+				}
 				if (isFindShortcut(event)) {
 					openFind();
 					return false;
