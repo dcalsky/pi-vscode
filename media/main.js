@@ -687,7 +687,7 @@
 			const entry = session.tabId ? terminals.get(session.tabId) : undefined;
 			const items = [];
 			if (entry && !entry.detached) {
-				items.push({ label: "Close", hint: "Close this tab; Pi keeps running", run: () => closeTerminal(session.tabId) });
+				items.push({ label: "Close", hint: closeBehaviorStop ? "Stop the Pi process and close this tab" : "Close this tab; Pi keeps running", run: () => closeTab(session.tabId) });
 			}
 			// A tab id means the extension still has a live Pi process for this session.
 			if (session.tabId) {
@@ -929,7 +929,7 @@
 		if (activeId && terminals.has(activeId)) {
 			items.push(...sessionHistoryActionItems(sessionSummaryForTerminal(activeId)));
 			items.push({ label: "Archive session", run: () => archiveTerminal(activeId) });
-			items.push({ label: "Close session", hint: "Pi keeps running", run: () => closeTerminal(activeId) });
+			items.push({ label: "Close session", hint: closeBehaviorStop ? "Stop the Pi process and close this tab" : "Pi keeps running", run: () => closeTab(activeId) });
 			items.push({ label: `${STOP_LABEL} for this session`, run: () => shutdownTerminal(activeId) });
 			items.push({
 				label: "Delete session",
