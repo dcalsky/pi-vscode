@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmodSync, promises as fs, watch, type FSWatcher } from "node:fs";
+import { accessSync, chmodSync, constants, existsSync, promises as fs, watch, type FSWatcher } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import * as pty from "node-pty";
 import * as vscode from "vscode";
@@ -28,6 +30,7 @@ import {
 	type PiSessionState,
 	type PiStatusReport,
 } from "./status-bridge";
+import { win32Spawn } from "./pi-command";
 import { httpUrl, resolveFileLink } from "./terminal-links";
 import { normalizeViewState, setArchived, type PiViewState } from "./view-state";
 import { terminalOptions } from "./xterm-options";
@@ -77,8 +80,11 @@ const PI_VIEW_STATE_KEY = "piAgent.viewState";
 const PI_FORK_DRAFT_FILE_ENV = "PI_VSCODE_FORK_DRAFT_FILE";
 const PI_NATIVE_DRAFT_FILE_ENV = "PI_VSCODE_DRAFT_FILE";
 const SESSION_ACTION_DISABLED_MESSAGE = "Available until session is done";
+const DEFAULT_PI_COMMAND = "pi";
 let ptyPrepared = false;
 let piViewProvider: PiViewProvider | undefined;
+/** Command resolved by auto-detection; used until the user sets piAgent.command explicitly. */
+let resolvedPiCommand: string | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
 	const provider = new PiViewProvider(context.extensionUri, context.workspaceState);
@@ -194,6 +200,7 @@ class PiPanel implements vscode.Disposable {
 	private readonly statusBridge: PiStatusBridge;
 	private viewState: PiViewState;
 	private refreshTimer: NodeJS.Timeout | undefined;
+	private recoveringStart = false;
 	private historyWatchSyncing = false;
 	private statusBridgeReady = false;
 	private ready = false;
@@ -620,7 +627,7 @@ class PiPanel implements vscode.Disposable {
 			this.pendingStarts.push({ id, sessionPath, options });
 			return undefined;
 		}
-		const command = vscode.workspace.getConfiguration("piAgent").get<string>("command", "pi").trim();
+		const command = vscode.workspace.getConfiguration("piAgent").get<string>("command", DEFAULT_PI_COMMAND).trim();
 		if (!command) {
 			const failure = "Set piAgent.command to the pi executable.";
 			if (options.reportError !== false) void vscode.window.showErrorMessage(failure);
@@ -638,14 +645,16 @@ class PiPanel implements vscode.Disposable {
 				: options.draftFile
 					? { [PI_FORK_DRAFT_FILE_ENV]: options.draftFile }
 					: {};
-			const process = pty.spawn(command, args, {
+			const file = effectivePiCommand(command);
+			const spawn = process.platform === "win32" ? win32Spawn(file, args) : { file, args };
+			const child = pty.spawn(spawn.file, spawn.args, {
 				cwd: this.cwd,
 				name: "xterm-256color",
 				cols: this.cols,
 				rows: this.rows,
 				env: { ...terminalEnvironment(), ...this.statusBridge.environmentFor(tabId), ...draftEnvironment },
 			});
-			spawnedProcess = process;
+			spawnedProcess = child;
 			const title = this.titleForSession(id);
 			const session: RunningSession = {
 				tabId,
@@ -654,16 +663,16 @@ class PiPanel implements vscode.Disposable {
 				title,
 				path: sessionPath,
 				attached: true,
-				process,
+				process: child,
 			};
 			this.sessions.set(tabId, session);
 			this.statusSequences.delete(tabId);
 			this.sessionStates.set(id, "starting");
-			process.onData((data) => {
+			child.onData((data) => {
 				this.post({ type: "data", id: tabId, data });
 				this.refreshSoon();
 			});
-			process.onExit(({ exitCode }) => this.handleExit(tabId, process, exitCode));
+			child.onExit(({ exitCode }) => this.handleExit(tabId, child, exitCode));
 			this.post({ type: "session-open", id: tabId, sessionId: id, title });
 			this.persistViewState();
 			this.postHistory();
@@ -675,9 +684,98 @@ class PiPanel implements vscode.Disposable {
 			this.statusSequences.delete(id);
 			spawnedProcess?.kill();
 			const failure = `Could not start pi: ${errorMessage(error)}`;
-			if (options.reportError !== false) void vscode.window.showErrorMessage(failure);
+			if (options.reportError !== false) {
+				// Auto-detect pi (PATH, npm global dir) and restart; only prompt when that fails.
+				void this.recoverStart(id, sessionPath, options, failure);
+			}
 			return failure;
 		}
+	}
+
+	/**
+	 * A session failed to spawn. Try to locate pi automatically; if that fails, ask the user
+	 * for its executable (browse or type) and restart with it saved to piAgent.command.
+	 */
+	private async recoverStart(
+		id: string,
+		sessionPath: string | undefined,
+		options: StartSessionOptions,
+		failure: string,
+	): Promise<void> {
+		if (this.disposed || this.recoveringStart) return;
+		this.recoveringStart = true;
+		try {
+			const configured = vscode.workspace.getConfiguration("piAgent").get<string>("command", DEFAULT_PI_COMMAND).trim();
+			// Only auto-detect the default bare name; an explicit path is the user's own choice.
+			if (configured === DEFAULT_PI_COMMAND && !resolvedPiCommand) {
+				const found = await detectPiCommand();
+				if (found && !this.disposed) {
+					resolvedPiCommand = found;
+					const retry = this.startSession(id, sessionPath, { ...options, reportError: false });
+					if (!retry) return;
+					failure = retry;
+				}
+			}
+			await this.promptForPiLocation(id, sessionPath, options, failure);
+		} finally {
+			this.recoveringStart = false;
+		}
+	}
+
+	private async promptForPiLocation(
+		id: string,
+		sessionPath: string | undefined,
+		options: StartSessionOptions,
+		failure: string,
+	): Promise<void> {
+		if (this.disposed) return;
+		const action = await vscode.window.showErrorMessage(
+			`${failure}\nInstall pi with \"npm install -g @earendil-works/pi-coding-agent\" (Git Bash is required on Windows), or point to an existing executable.`,
+			"Locate pi...",
+			"Install pi",
+		);
+		if (!action || this.disposed) return;
+		if (action === "Install pi") {
+			await vscode.env.openExternal(vscode.Uri.parse("https://pi.dev"));
+			return;
+		}
+
+		const browse = "Browse for the pi executable";
+		const manual = "Enter the path manually";
+		const method = await vscode.window.showQuickPick(
+			[
+				{ label: browse, detail: "Open a file picker and select the pi executable" },
+				{ label: manual, detail: "Type the absolute path to the pi executable" },
+			],
+			{ placeHolder: "How do you want to provide the pi executable?" },
+		);
+		let chosen: string | undefined;
+		if (method?.label === browse) {
+			const picked = await vscode.window.showOpenDialog({
+				canSelectFiles: true,
+				canSelectMany: false,
+				openLabel: "Select pi executable",
+				title: "Select the pi executable",
+			});
+			chosen = picked?.[0]?.fsPath;
+		} else if (method?.label === manual) {
+			chosen = await vscode.window.showInputBox({
+				prompt: "Absolute path to the pi executable",
+				placeHolder:
+					process.platform === "win32" ? "C:\\Users\\you\\AppData\\Roaming\\npm\\pi.cmd" : "/usr/local/bin/pi",
+				validateInput: (value) => {
+					const path = value.trim();
+					if (!path) return "Enter a path";
+					return existsSync(path) ? undefined : "File not found";
+				},
+			});
+		}
+		const path = chosen?.trim();
+		if (!path || this.disposed) return;
+		await vscode.workspace.getConfiguration("piAgent").update("piAgent.command", path, vscode.ConfigurationTarget.Global);
+		resolvedPiCommand = undefined;
+		const retry = this.startSession(id, sessionPath, { ...options, reportError: false });
+		if (retry) void vscode.window.showErrorMessage(retry);
 	}
 
 	private handleExit(tabId: string, process: pty.IPty, exitCode: number): void {
@@ -875,6 +973,58 @@ function terminalEnvironment(): Record<string, string> {
 		Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
 	);
 	return { ...env, TERM: "xterm-256color", COLORTERM: "truecolor" };
+}
+
+/** An explicit piAgent.command wins; the auto-detected path only fills in the default. */
+function effectivePiCommand(configured: string): string {
+	return configured === DEFAULT_PI_COMMAND ? (resolvedPiCommand ?? configured) : configured;
+}
+
+async function detectPiCommand(): Promise<string | undefined> {
+	return process.platform === "win32" ? detectPiCommandWindows() : detectPiCommandUnix();
+}
+
+async function detectPiCommandWindows(): Promise<string | undefined> {
+	const where = await runCapture("cmd.exe", ["/d", "/s", "/c", "where pi"]);
+	for (const line of where.split(/\r?\n/)) {
+		const hit = line.trim();
+		if (hit && existsSync(hit)) return hit;
+	}
+	// npm's global dir may be missing from a GUI-launched VS Code PATH (nvm, fnm, custom prefix).
+	const appData = process.env.APPDATA;
+	const npmShim = appData ? join(appData, "npm", "pi.cmd") : undefined;
+	return npmShim && existsSync(npmShim) ? npmShim : undefined;
+}
+
+async function detectPiCommandUnix(): Promise<string | undefined> {
+	const which = await runCapture("which", ["pi"]);
+	for (const line of which.split("\n")) {
+		const hit = line.trim();
+		if (hit && existsSync(hit)) return hit;
+	}
+	// GUI-launched VS Code may miss shell-profile PATH entries (Homebrew, custom npm prefix).
+	for (const dir of ["/opt/homebrew/bin", "/usr/local/bin", join(homedir(), ".local", "bin"), join(homedir(), ".bun", "bin")]) {
+		const candidate = join(dir, "pi");
+		if (isExecutableFile(candidate)) return candidate;
+	}
+	return undefined;
+}
+
+function isExecutableFile(path: string): boolean {
+	try {
+		accessSync(path, constants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function runCapture(file: string, args: string[], timeoutMs = 5_000): Promise<string> {
+	return new Promise((resolvePromise) => {
+		execFile(file, args, { timeout: timeoutMs, windowsHide: true }, (error, stdout) => {
+			resolvePromise(error ? "" : stdout);
+		});
+	});
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
