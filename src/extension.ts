@@ -229,11 +229,13 @@ class PiPanel implements vscode.Disposable {
 		};
 		this.panel.webview.html = webviewHtml(this.panel.webview, extensionUri);
 		this.postTerminalOptions();
+		this.postCloseBehavior();
 		vscode.workspace.onDidChangeConfiguration(
 			(event) => {
 				if (event.affectsConfiguration("terminal.integrated") || event.affectsConfiguration("editor")) {
 					this.postTerminalOptions();
 				}
+				if (event.affectsConfiguration("piAgent.closeBehavior")) this.postCloseBehavior();
 			},
 			undefined,
 			this.disposables,
@@ -425,7 +427,7 @@ class PiPanel implements vscode.Disposable {
 		this.postHistory();
 	}
 
-	// Archiving only files the session under Archive; it leaves Pi and the tab alone.
+	// Archiving only files the session under Archive; the webview closes its tab, Pi keeps running.
 	private archiveSession(sessionId: string, archived: boolean): void {
 		this.viewState = setArchived(this.viewState, sessionId, archived);
 		this.persistViewState();
@@ -931,6 +933,11 @@ class PiPanel implements vscode.Disposable {
 			type: "options",
 			options: terminalOptions((section) => vscode.workspace.getConfiguration(section)),
 		});
+	}
+
+	private postCloseBehavior(): void {
+		const stop = vscode.workspace.getConfiguration("piAgent").get<string>("closeBehavior", "detach") === "stop";
+		this.post({ type: "close-behavior", stop });
 	}
 
 	private post(message: object): void {

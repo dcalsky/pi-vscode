@@ -2,7 +2,7 @@
   "name": "pi-coding",
   "displayName": "Pi Coding",
   "description": "Run pi coding-agent sessions in VS Code: several sessions side by side, live status for each one, and file paths that open in the editor.",
-  "version": "0.0.42",
+  "version": "0.0.44",
   "publisher": "EthanChow",
   "icon": "images/logo.png",
   "repository": {
@@ -65,6 +65,19 @@
           "type": "string",
           "default": "pi",
           "description": "Executable or absolute path used to start pi. Leave as pi to auto-detect (including npm's pi.cmd on Windows); set an absolute path when detection cannot find it."
+        },
+        "piAgent.closeBehavior": {
+          "type": "string",
+          "enum": [
+            "detach",
+            "stop"
+          ],
+          "enumDescriptions": [
+            "Closing a session tab (or Cmd/Ctrl+W) only hides it; the Pi process keeps running and the session can be reopened from the list.",
+            "Closing a session tab (or Cmd/Ctrl+W) stops the Pi process and closes the tab."
+          ],
+          "default": "detach",
+          "description": "What closing a session tab does."
         }
       }
     },

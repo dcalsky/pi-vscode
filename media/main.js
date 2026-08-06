@@ -38,6 +38,7 @@
 	const SESSION_ACTION_DISABLED_HINT = "Available until session is done";
 	let activeId;
 	let historySessions = [];
+	let closeBehaviorStop = false;
 	let messageDialogState;
 	let messageRequestSequence = 0;
 
@@ -342,6 +343,12 @@
 		vscode.postMessage({ type: "shutdown", id });
 	}
 
+	// Tab-close paths follow piAgent.closeBehavior; Archive always detaches.
+	function closeTab(id) {
+		if (closeBehaviorStop) shutdownTerminal(id);
+		else closeTerminal(id);
+	}
+
 	function selectNeighbour(closedId, index) {
 		if (activeId !== closedId) {
 			render();
@@ -362,6 +369,12 @@
 
 	function setArchived(sessionId, archived) {
 		if (!sessionId) return;
+		// Archiving closes the session's tab; Pi keeps running and can be resumed from the list.
+		if (archived) {
+			for (const [id, entry] of terminals) {
+				if (entry.sessionId === sessionId) closeTerminal(id);
+			}
+		}
 		vscode.postMessage({ type: "archive", id: sessionId, archived });
 	}
 
@@ -505,7 +518,7 @@
 	function closeActiveSessionOrView() {
 		const active = activeId && terminals.get(activeId);
 		if (active && !active.detached) {
-			closeTerminal(activeId);
+			closeTab(activeId);
 			return;
 		}
 		vscode.postMessage({ type: "close-view" });
@@ -541,12 +554,12 @@
 			const close = document.createElement("button");
 			close.type = "button";
 			close.className = "tab-close";
-			close.title = `Close ${entry.title} (Pi keeps running)`;
+			close.title = closeBehaviorStop ? `Close ${entry.title}` : `Close ${entry.title} (Pi keeps running)`;
 			close.setAttribute("aria-label", close.title);
 			close.append(icon("close"));
 			close.addEventListener("click", (event) => {
 				event.stopPropagation();
-				closeTerminal(id);
+				closeTab(id);
 			});
 
 			tab.append(select, close);
@@ -556,10 +569,10 @@
 
 	function tabMenuItems(id) {
 		return [
-			{ label: "Close", hint: "Close this tab; Pi keeps running", run: () => closeTerminal(id) },
+			{ label: "Close", hint: closeBehaviorStop ? "Stop the Pi process and close this tab" : "Close this tab; Pi keeps running", run: () => closeTab(id) },
 			{ label: STOP_LABEL, hint: "Stop the Pi process and close this tab", run: () => shutdownTerminal(id) },
 			...sessionHistoryActionItems(sessionSummaryForTerminal(id)),
-			{ label: "Archive", hint: "File this session under Archive", run: () => archiveTerminal(id) },
+			{ label: "Archive", hint: "Close its tab and file this session under Archive", run: () => archiveTerminal(id) },
 			{ label: "Delete", hint: DELETE_HINT, run: () => deleteSession(terminals.get(id)?.sessionId) },
 		];
 	}
@@ -687,7 +700,7 @@
 			items.push(...sessionHistoryActionItems(session));
 			items.push({
 				label: archived ? "Restore" : "Archive",
-				hint: archived ? "Move this session back to its date group" : "File this session under Archive",
+				hint: archived ? "Move this session back to its date group" : "Close its tab and file this session under Archive",
 				run: () => setArchived(session.id, !archived),
 			});
 			items.push({ label: "Delete", hint: DELETE_HINT, run: () => deleteSession(session.id) });
@@ -793,10 +806,42 @@
 
 	function setSidebarVisible(visible) {
 		app.classList.toggle("sidebar-hidden", !visible);
+		// Clear any dragged width so the inline style can't override the collapse above.
+		app.style.gridTemplateColumns = "";
 		sidebar.hidden = !visible;
 		showSidebar.hidden = visible;
 		if (activeId) requestAnimationFrame(() => sendSize(activeId));
 	}
+
+	// Auto-hide the sidebar when the panel gets narrow; never auto-show, the user's toggle wins.
+	const narrow = matchMedia("(max-width: 640px)");
+	narrow.addEventListener("change", () => { if (narrow.matches) setSidebarVisible(false); });
+	if (narrow.matches) setSidebarVisible(false);
+
+	// Drag the sidebar's left edge to resize; clamped so it can't go below the usable minimum.
+	const SIDEBAR_MIN = 210;
+	const grip = document.createElement("div");
+	grip.id = "sidebar-grip";
+	sidebar.append(grip);
+	grip.addEventListener("pointerdown", (e) => {
+		e.preventDefault();
+		grip.setPointerCapture(e.pointerId);
+		const startX = e.clientX;
+		const startW = sidebar.getBoundingClientRect().width;
+		let raf = 0;
+		const move = (ev) => {
+			const w = Math.min(Math.max(startW + startX - ev.clientX, SIDEBAR_MIN), innerWidth * 0.7);
+			app.style.gridTemplateColumns = `minmax(0, 1fr) ${w}px`;
+			if (activeId && !raf) raf = requestAnimationFrame(() => { raf = 0; sendSize(activeId); });
+		};
+		const up = () => {
+			grip.removeEventListener("pointermove", move);
+			grip.removeEventListener("pointerup", up);
+			if (activeId) sendSize(activeId);
+		};
+		grip.addEventListener("pointermove", move);
+		grip.addEventListener("pointerup", up);
+	});
 
 	window.addEventListener("message", (event) => {
 		const message = event.data;
@@ -838,6 +883,10 @@
 				options = message.options;
 				for (const entry of terminals.values()) applyOptions(entry.term);
 				if (activeId) requestAnimationFrame(() => sendSize(activeId));
+				break;
+			case "close-behavior":
+				closeBehaviorStop = message.stop === true;
+				render();
 				break;
 		}
 	});

@@ -18,7 +18,7 @@ Run [pi coding agent](https://pi.dev) sessions in VS Code. Each session is a rea
 
 - One entry per session, newest first. The title is the latest `session_info.name` from the session's JSONL transcript; sessions without one show `New Session`.
 - Click an entry to focus its open terminal, or to resume it from disk (`pi --session <file>`) if it is not running.
-- Hover a session to see when it was last used and to **Archive** it. Archiving only moves the entry to the `Archive` group; Pi and any open tab keep running. The same button restores it.
+- Hover a session to see when it was last used and to **Archive** it. Archiving moves the entry to the `Archive` group and closes its tab; Pi keeps running. The same button restores it.
 - **Delete** asks for confirmation, then stops Pi, closes the tab, and erases the transcript and sidecar directory from `~/.pi/agent/sessions/--<cwd>--/`.
 - Long groups collapse behind **More**; each group name collapses on click.
 - Below ~460px the view scrolls sideways instead of dropping the list. Hide the list with the pane toggle to give Pi the full width.

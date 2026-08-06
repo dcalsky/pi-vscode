@@ -328,7 +328,22 @@ body {
 	grid-template-rows: auto auto auto minmax(0, 1fr);
 	min-width: 0;
 	min-height: 0;
+	position: relative;
 	background: var(--pi-surface);
+}
+
+#sidebar-grip {
+	position: absolute;
+	left: -2px;
+	top: 0;
+	bottom: 0;
+	width: 5px;
+	cursor: col-resize;
+	z-index: 5;
+}
+
+#sidebar-grip:hover {
+	background: var(--vscode-focusBorder);
 }
 
 #sidebar-header {
