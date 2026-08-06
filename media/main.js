@@ -116,6 +116,10 @@
 			scrollbarSliderBackground: color("--vscode-scrollbarSlider-background", "") || undefined,
 			scrollbarSliderHoverBackground: color("--vscode-scrollbarSlider-hoverBackground", "") || undefined,
 			scrollbarSliderActiveBackground: color("--vscode-scrollbarSlider-activeBackground", "") || undefined,
+			// The overview ruler (find-decoration strip next to the scrollbar) draws its 1px
+			// outline in overviewRulerBorder; unset it defaults to the bright foreground, which
+			// reads as an ugly border on the scrollbar. Paint it in the pane background to hide it.
+			overviewRulerBorder: background,
 		};
 		for (const name of ANSI_NAMES) {
 			const value = color(`--vscode-terminal-ansi${name[0].toUpperCase()}${name.slice(1)}`, "");

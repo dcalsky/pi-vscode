@@ -2,7 +2,7 @@
   "name": "pi-coding",
   "displayName": "Pi Coding",
   "description": "Run pi coding-agent sessions in VS Code: several sessions side by side, live status for each one, and file paths that open in the editor.",
-  "version": "0.0.39",
+  "version": "0.0.41",
   "publisher": "EthanChow",
   "icon": "images/logo.png",
   "repository": {
@@ -64,7 +64,7 @@
         "piAgent.command": {
           "type": "string",
           "default": "pi",
-          "description": "Executable or absolute path used to start pi."
+          "description": "Executable or absolute path used to start pi. Leave as pi to auto-detect (including npm's pi.cmd on Windows); set an absolute path when detection cannot find it."
         }
       }
     },
@@ -100,7 +100,7 @@
   "scripts": {
     "compile": "tsc -p .",
     "vscode:prepublish": "npm run compile",
-    "test": "npm run compile && node --test out/test/clipboard.test.js out/test/session-actions.test.js out/test/session-store.test.js out/test/session-view.test.js out/test/status-bridge.test.js out/test/terminal-links.test.js out/test/terminal-link-provider.test.js out/test/terminal-copy.test.js out/test/view-state.test.js out/test/xterm-options.test.js",
+    "test": "npm run compile && node --test out/test/clipboard.test.js out/test/pi-command.test.js out/test/session-actions.test.js out/test/session-store.test.js out/test/session-view.test.js out/test/status-bridge.test.js out/test/terminal-links.test.js out/test/terminal-link-provider.test.js out/test/terminal-copy.test.js out/test/view-state.test.js out/test/xterm-options.test.js",
     "package": "npm version patch --no-git-tag-version --ignore-scripts && npx --yes @vscode/vsce package"
   },
   "dependencies": {
