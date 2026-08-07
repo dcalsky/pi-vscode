@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createConnection } from "node:net";
 import test from "node:test";
-import { becameIdle, PiStatusBridge, type PiForkRequest, type PiStatusReport } from "../status-bridge";
+import { becameIdle, PiStatusBridge, type PiForkRequest, type PiPanelRequest, type PiStatusReport } from "../status-bridge";
 
 test("relays only token-authenticated Pi status reports", async () => {
 	const reports: PiStatusReport[] = [];
@@ -121,6 +121,126 @@ test("returns a fork handler failure to Pi", async () => {
 		requestId: "request-2",
 		ok: false,
 		error: "cannot open target",
+	});
+	await bridge.dispose();
+});
+
+test("relays and answers token-authenticated panel requests", async () => {
+	const requests: PiPanelRequest[] = [];
+	const bridge = new PiStatusBridge(
+		() => undefined,
+		undefined,
+		(request) => {
+			requests.push(request);
+			return Promise.resolve({ sessions: [] });
+		},
+	);
+	await bridge.start();
+	const environment = bridge.environmentFor("tab-1");
+
+	const response = await request(environment.PI_VSCODE_STATUS_SOCKET!, {
+		type: "pi-vscode-panel",
+		token: environment.PI_VSCODE_STATUS_TOKEN,
+		requestId: "panel-1",
+		action: "list",
+	});
+	assert.deepEqual(response, { type: "pi-vscode-panel-result", requestId: "panel-1", ok: true, result: { sessions: [] } });
+	assert.deepEqual(requests, [
+		{
+			requestId: "panel-1",
+			action: "list",
+			tabId: undefined,
+			tabIds: undefined,
+			text: undefined,
+			model: undefined,
+			sinceMs: undefined,
+			timeoutMs: undefined,
+		},
+	]);
+
+	const rejected = await request(environment.PI_VSCODE_STATUS_SOCKET!, {
+		type: "pi-vscode-panel",
+		token: "wrong",
+		requestId: "panel-2",
+		action: "list",
+	}).catch((error: Error) => error);
+	assert.equal(rejected instanceof Error, true);
+	assert.equal(requests.length, 1);
+
+	// New-style fields relay through validation: batch wait targets and a create model.
+	const created = await request(environment.PI_VSCODE_STATUS_SOCKET!, {
+		type: "pi-vscode-panel",
+		token: environment.PI_VSCODE_STATUS_TOKEN,
+		requestId: "panel-5",
+		action: "create",
+		model: "openai/gpt-5:high",
+	});
+	assert.equal((created as { ok: boolean }).ok, true);
+	assert.deepEqual(requests[1], {
+		requestId: "panel-5",
+		action: "create",
+		tabId: undefined,
+		tabIds: undefined,
+		text: undefined,
+		model: "openai/gpt-5:high",
+		sinceMs: undefined,
+		timeoutMs: undefined,
+	});
+
+	const invalid = await request(environment.PI_VSCODE_STATUS_SOCKET!, {
+		type: "pi-vscode-panel",
+		token: environment.PI_VSCODE_STATUS_TOKEN,
+		requestId: "panel-6",
+		action: "wait",
+		tabIds: [],
+	}).catch((error: Error) => error);
+	assert.equal(invalid instanceof Error, true);
+	assert.equal(requests.length, 2);
+	await bridge.dispose();
+});
+
+test("returns a panel handler failure to Pi and holds long waits open", async () => {
+	const bridge = new PiStatusBridge(
+		() => undefined,
+		undefined,
+		(request) => {
+			if (request.action === "prompt") return Promise.reject(new Error("No open panel tab-9"));
+			// A wait that resolves after the old 10s socket guard would have fired is
+			// impractical to test; 50ms still proves the timeout is cleared on dispatch.
+			return new Promise((resolve) => setTimeout(() => resolve({ state: "idle", settled: true }), 50));
+		},
+	);
+	await bridge.start();
+	const environment = bridge.environmentFor("tab-1");
+
+	const failure = await request(environment.PI_VSCODE_STATUS_SOCKET!, {
+		type: "pi-vscode-panel",
+		token: environment.PI_VSCODE_STATUS_TOKEN,
+		requestId: "panel-3",
+		action: "prompt",
+		tabId: "tab-9",
+		text: "hello",
+	});
+	assert.deepEqual(failure, {
+		type: "pi-vscode-panel-result",
+		requestId: "panel-3",
+		ok: false,
+		error: "No open panel tab-9",
+	});
+
+	const waited = await request(environment.PI_VSCODE_STATUS_SOCKET!, {
+		type: "pi-vscode-panel",
+		token: environment.PI_VSCODE_STATUS_TOKEN,
+		requestId: "panel-4",
+		action: "wait",
+		tabId: "tab-1",
+		timeoutMs: 5000,
+	});
+	assert.deepEqual(waited, {
+		type: "pi-vscode-panel-result",
+		requestId: "panel-4",
+		ok: true,
+		result: { state: "idle", settled: true },
 	});
 	await bridge.dispose();
 });

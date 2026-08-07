@@ -13,6 +13,7 @@ Run [pi coding agent](https://pi.dev) sessions in VS Code. Each session is a rea
 - **Session management.** Browse every session for the current workspace in the list, grouped by `Today` / `Yesterday` / `Last 7 Days` / `Last 30 Days` / `Older` / `Archive`. Resume, archive, close, or delete sessions from the list or the terminal tab's context menu. Open tabs are remembered per workspace and reopened next time.
 - **Fork and rewind sessions.** Right-click a session and pick **Fork** or **Rewind** to branch from, or go back to, any earlier user message. Fork opens the copy in a new tab; Rewind rewinds the session and restarts Pi with the message ready to re-send. Both are disabled while Pi is working. Rewind can also restore files to the state captured before the message — the checkpoint is a Git object in the transcript and never touches the real index; restoring files requires a Git repository.
 - **Audio cue.** A short tone plays when a session goes from working to waiting — so you can start a task, switch away, and get told when it is done or needs input.
+- **Agent panels (opt-in).** With the companion Pi package installed, a Pi session can spawn sibling Pi sessions in background tabs and drive them — prompt, wait for completion, list — so one orchestrator can fan reviews out to parallel agents and run fix/verify loops. See [Agent panels](#agent-panels).
 
 ## Session list
 
@@ -31,6 +32,19 @@ Run [pi coding agent](https://pi.dev) sessions in VS Code. Each session is a rea
 - **Stop Pi** ends the process and closes the tab. The session stays listed and can be resumed.
 - A tab closes itself when its Pi process exits; a non-zero exit shows a warning notification.
 - Hold **⌘** (macOS) or **Ctrl** (Windows/Linux) and click a file path or HTTP(S) URL to open it. Source locations such as `src/file.ts:12:3` are honored.
+
+## Companion Pi packages
+
+Two optional pi packages extend what Pi sessions can do inside this extension. Each is installed separately, loads in every Pi session, and acts only in sessions started by this extension — in plain terminals they stay inert.
+
+- **[`pi-vscode-fork`](plugins/fork/)** — `pi install npm:pi-vscode-fork`. Adds the `/fork-with-vscode` command: fork the conversation from any earlier user message into a new session tab.
+- **[`pi-vscode-panels`](plugins/panels/)** — `pi install npm:pi-vscode-panels`, or `pi install ./plugins/panels` from a repo checkout. Adds panel orchestration tools (below) and the `pi-panels` skill.
+
+### Agent panels
+
+With `pi-vscode-panels` installed, every Pi session gets four tools: `panel_create` (open a sibling Pi in a background tab, optionally with a chosen model, answered once it is ready), `panel_prompt` (submit a prompt to it), `panel_wait` (block until it goes idle — or pass `tabIds` to wait for a whole batch — with stall detection), and `panel_list` (all sessions with their state). The extension host listens for panel requests on the status socket whether or not the package is installed.
+
+Panels share the workspace filesystem, so agents exchange briefs and results through files — e.g. parallel reviewers each writing `review/<topic>/<name>.md`, an orchestrator merging them, a fixer and a verifier looping until clean. The package also bundles the [pi-panels skill](plugins/panels/skills/pi-panels/SKILL.md), a ready-made playbook for that review → human check → fix → verify workflow.
 
 ## Use
 

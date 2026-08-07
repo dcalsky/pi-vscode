@@ -27,6 +27,7 @@ import {
 	becameIdle,
 	PiStatusBridge,
 	type PiForkRequest,
+	type PiPanelRequest,
 	type PiSessionState,
 	type PiStatusReport,
 } from "./status-bridge";
@@ -51,6 +52,15 @@ interface StartSessionOptions {
 	draftFile?: string;
 	nativeDraftFile?: string;
 	reportError?: boolean;
+	/** Agent-created panels open in the background without stealing focus. */
+	noFocus?: boolean;
+	/** Passed to `pi --model` for agent-created panels. */
+	model?: string;
+}
+
+interface PanelWaiter {
+	tabId: string;
+	resolve: () => void;
 }
 
 type SessionHistoryAction = "fork" | "rewind";
@@ -81,6 +91,11 @@ const PI_FORK_DRAFT_FILE_ENV = "PI_VSCODE_FORK_DRAFT_FILE";
 const PI_NATIVE_DRAFT_FILE_ENV = "PI_VSCODE_DRAFT_FILE";
 const SESSION_ACTION_DISABLED_MESSAGE = "Available until session is done";
 const DEFAULT_PI_COMMAND = "pi";
+/** Like herdr's agent prompt stall check: a prompted panel must show activity within this window. */
+const PANEL_STALL_MS = 15_000;
+const PANEL_READY_TIMEOUT_MS = 30_000;
+const DEFAULT_PANEL_WAIT_TIMEOUT_MS = 30 * 60_000;
+const MAX_PANEL_WAIT_TIMEOUT_MS = 2 * 3_600_000;
 let ptyPrepared = false;
 let piViewProvider: PiViewProvider | undefined;
 /** Command resolved by auto-detection; used until the user sets piAgent.command explicitly. */
@@ -193,6 +208,8 @@ class PiPanel implements vscode.Disposable {
 	private readonly sessionStates = new Map<string, PiSessionState>();
 	private readonly statusSequences = new Map<string, { sourceId: string; seq: number }>();
 	private readonly historyWatchers = new Map<string, FSWatcher>();
+	private readonly tabStates = new Map<string, { state: PiSessionState; changedAtMs: number }>();
+	private readonly panelWaiters = new Set<PanelWaiter>();
 	private readonly replacingProcesses = new Set<pty.IPty>();
 	private readonly sessionActions = new Set<string>();
 	private readonly messageQueue: object[] = [];
@@ -219,6 +236,7 @@ class PiPanel implements vscode.Disposable {
 		this.statusBridge = new PiStatusBridge(
 			(report) => this.handleStatusReport(report),
 			(request) => this.handleForkRequest(request),
+			(request) => this.handlePanelRequest(request),
 		);
 		this.panel.webview.options = {
 			enableScripts: true,
@@ -261,6 +279,7 @@ class PiPanel implements vscode.Disposable {
 		if (this.disposed) return;
 		this.disposed = true;
 		if (this.refreshTimer) clearTimeout(this.refreshTimer);
+		for (const waiter of [...this.panelWaiters]) waiter.resolve();
 		for (const watcher of this.historyWatchers.values()) watcher.close();
 		this.historyWatchers.clear();
 		void this.statusBridge.dispose();
@@ -391,6 +410,7 @@ class PiPanel implements vscode.Disposable {
 		this.sessions.delete(tabId);
 		this.statusSequences.delete(tabId);
 		this.sessionStates.set(session.sessionId, "inactive");
+		this.noteTabState(tabId, "inactive");
 		session.process.kill();
 		this.post({ type: "session-close", id: tabId });
 		this.persistViewState();
@@ -624,6 +644,137 @@ class PiPanel implements vscode.Disposable {
 		if (failure) throw new Error(failure);
 	}
 
+	private async handlePanelRequest(request: PiPanelRequest): Promise<unknown> {
+		switch (request.action) {
+			case "create":
+				return this.panelCreate(request.model);
+			case "prompt":
+				return this.panelPrompt(request.tabId, request.text);
+			case "wait":
+				return request.tabIds
+					? this.panelWaitAll(request.tabIds, request.sinceMs, request.timeoutMs)
+					: this.panelWait(request.tabId, request.sinceMs, request.timeoutMs);
+			case "list":
+				return this.panelList();
+		}
+	}
+
+	/** Like `herdr agent start`: open a background tab and answer once its Pi accepts input. */
+	private async panelCreate(model: string | undefined): Promise<{ tabId: string; sessionId: string }> {
+		const id = randomUUID();
+		const failure = this.startSession(id, undefined, { noFocus: true, reportError: false, model });
+		if (failure) throw new Error(failure);
+		const deadline = Date.now() + PANEL_READY_TIMEOUT_MS;
+		for (;;) {
+			if (this.disposed) throw new Error("The Pi view is closed");
+			const current = this.tabStates.get(id);
+			if (current && (current.state === "idle" || current.state === "working")) {
+				return { tabId: id, sessionId: id };
+			}
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) throw new Error(`Panel ${id} did not become ready within ${PANEL_READY_TIMEOUT_MS / 1000}s`);
+			await Promise.race([this.waitForTabChange(id), sleep(remaining)]);
+		}
+	}
+
+	/** Bracketed paste keeps newlines literal in Pi's editor; Enter submits after the paste closes. */
+	private async panelPrompt(tabId: string | undefined, text: string | undefined): Promise<{ tabId: string; promptedAtMs: number }> {
+		if (!tabId || !text) throw new Error("panel prompt requires tabId and text");
+		const session = this.sessions.get(tabId);
+		if (!session) throw new Error(`No open panel ${tabId}`);
+		session.process.write(`\x1b[200~${text}\x1b[201~`);
+		await sleep(100);
+		session.process.write("\r");
+		return { tabId, promptedAtMs: Date.now() };
+	}
+
+	private async panelWait(
+		tabId: string | undefined,
+		sinceMs: number | undefined,
+		timeoutMs: number | undefined,
+	): Promise<{ tabId: string; state: PiSessionState; settled: boolean }> {
+		if (!tabId) throw new Error("panel wait requires a tabId");
+		const result = await this.panelWaitAll([tabId], sinceMs, timeoutMs);
+		const panel = result.panels[0];
+		return { tabId, state: panel.state, settled: panel.settled };
+	}
+
+	/** Fan-in wait: resolves when every listed panel settles (idle after sinceMs, or exits). */
+	private async panelWaitAll(
+		tabIds: string[],
+		sinceMs: number | undefined,
+		timeoutMs: number | undefined,
+	): Promise<{ settled: boolean; panels: Array<{ tabId: string; state: PiSessionState; settled: boolean }> }> {
+		for (const tabId of tabIds) {
+			if (!this.sessions.has(tabId) && this.tabStates.get(tabId)?.state !== "inactive") {
+				throw new Error(`No open panel ${tabId}`);
+			}
+		}
+		const timeout = clamp(Math.round(timeoutMs ?? DEFAULT_PANEL_WAIT_TIMEOUT_MS), 1_000, MAX_PANEL_WAIT_TIMEOUT_MS);
+		const deadline = Date.now() + timeout;
+		const stallDeadline = sinceMs === undefined ? undefined : sinceMs + PANEL_STALL_MS;
+		for (;;) {
+			if (this.disposed) {
+				return { settled: false, panels: tabIds.map((tabId) => ({ tabId, state: "inactive", settled: false })) };
+			}
+			const now = Date.now();
+			const panels = tabIds.map((tabId) => {
+				const current = this.tabStates.get(tabId);
+				const state = current?.state ?? "starting";
+				const settled =
+					(state === "idle" || state === "inactive") &&
+					(sinceMs === undefined || (current !== undefined && current.changedAtMs >= sinceMs));
+				if (
+					stallDeadline !== undefined &&
+					now >= stallDeadline &&
+					state === "idle" &&
+					current !== undefined &&
+					current.changedAtMs < sinceMs!
+				) {
+					throw new Error(
+						`Panel ${tabId} showed no activity within ${PANEL_STALL_MS / 1000}s of the prompt; ` +
+							"it may be busy or showing a dialog. Inspect the panel before retrying.",
+					);
+				}
+				return { tabId, state, settled };
+			});
+			if (panels.every((panel) => panel.settled)) return { settled: true, panels };
+			const remaining = deadline - now;
+			if (remaining <= 0) return { settled: false, panels };
+			await Promise.race([...tabIds.map((tabId) => this.waitForTabChange(tabId)), sleep(remaining)]);
+		}
+	}
+
+	private panelList(): Array<{ tabId: string; sessionId: string; title: string; state: PiSessionState }> {
+		return [...this.sessions.values()].map((session) => ({
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			title: session.title,
+			state: this.tabStates.get(session.tabId)?.state ?? "starting",
+		}));
+	}
+
+	private noteTabState(tabId: string, state: PiSessionState): void {
+		if (this.tabStates.get(tabId)?.state === state) return;
+		this.tabStates.set(tabId, { state, changedAtMs: Date.now() });
+		for (const waiter of [...this.panelWaiters]) {
+			if (waiter.tabId === tabId) waiter.resolve();
+		}
+	}
+
+	private waitForTabChange(tabId: string): Promise<void> {
+		return new Promise((resolve) => {
+			const waiter: PanelWaiter = {
+				tabId,
+				resolve: () => {
+					this.panelWaiters.delete(waiter);
+					resolve();
+				},
+			};
+			this.panelWaiters.add(waiter);
+		});
+	}
+
 	private startSession(id: string, sessionPath?: string, options: StartSessionOptions = {}): string | undefined {
 		if (!this.statusBridgeReady) {
 			this.pendingStarts.push({ id, sessionPath, options });
@@ -641,6 +792,7 @@ class PiPanel implements vscode.Disposable {
 			preparePty();
 			const tabId = id;
 			const args = sessionPath ? ["--session", sessionPath] : ["--session-id", id];
+			if (options.model) args.push("--model", options.model);
 			if (this.statusBridge.isListening) args.push("--extension", piStatusExtensionPath(this.extensionUri));
 			const draftEnvironment = options.nativeDraftFile
 				? { [PI_NATIVE_DRAFT_FILE_ENV]: options.nativeDraftFile }
@@ -670,12 +822,13 @@ class PiPanel implements vscode.Disposable {
 			this.sessions.set(tabId, session);
 			this.statusSequences.delete(tabId);
 			this.sessionStates.set(id, "starting");
+			this.noteTabState(tabId, "starting");
 			child.onData((data) => {
 				this.post({ type: "data", id: tabId, data });
 				this.refreshSoon();
 			});
 			child.onExit(({ exitCode }) => this.handleExit(tabId, child, exitCode));
-			this.post({ type: "session-open", id: tabId, sessionId: id, title });
+			this.post({ type: "session-open", id: tabId, sessionId: id, title, noFocus: options.noFocus === true });
 			this.persistViewState();
 			this.postHistory();
 			this.refreshSoon();
@@ -787,6 +940,7 @@ class PiPanel implements vscode.Disposable {
 		this.sessions.delete(tabId);
 		this.statusSequences.delete(tabId);
 		this.sessionStates.set(session.sessionId, "inactive");
+		this.noteTabState(tabId, "inactive");
 		this.persistViewState();
 		this.postHistory();
 		// Pi owns the session tab's lifetime: once it exits there is nothing left to show.
@@ -833,6 +987,7 @@ class PiPanel implements vscode.Disposable {
 		}
 		session.leafId = report.leafId;
 		this.sessionStates.set(report.sessionId, report.state);
+		this.noteTabState(report.tabId, report.state);
 		if (becameIdle(previousState, report.state)) this.post({ type: "attention" });
 		this.postHistory();
 	}
@@ -973,6 +1128,10 @@ function preparePty(): void {
 
 function piStatusExtensionPath(extensionUri: vscode.Uri): string {
 	return vscode.Uri.joinPath(extensionUri, "resources", "pi-vscode-status.ts").fsPath;
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function terminalEnvironment(): Record<string, string> {

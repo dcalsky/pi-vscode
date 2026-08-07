@@ -26,6 +26,21 @@ export interface PiForkRequest {
 	draftFile: string;
 }
 
+export type PiPanelAction = "create" | "prompt" | "wait" | "list";
+
+export interface PiPanelRequest {
+	requestId: string;
+	action: PiPanelAction;
+	tabId?: string;
+	/** Batch form of tabId for `wait`: settle when every listed panel settles. */
+	tabIds?: string[];
+	text?: string;
+	/** Model pattern for `create`, passed to `pi --model`. */
+	model?: string;
+	sinceMs?: number;
+	timeoutMs?: number;
+}
+
 interface WireStatusReport extends PiStatusReport {
 	type: "pi-vscode-status";
 	token: string;
@@ -36,7 +51,12 @@ interface WireForkRequest extends PiForkRequest {
 	token: string;
 }
 
-const MAX_MESSAGE_BYTES = 16 * 1024;
+interface WirePanelRequest extends PiPanelRequest {
+	type: "pi-vscode-panel";
+	token: string;
+}
+
+const MAX_MESSAGE_BYTES = 1024 * 1024;
 const REPORTED_STATES = new Set<ReportedState>(["working", "idle"]);
 
 export function becameIdle(previous: PiSessionState | undefined, next: ReportedState): boolean {
@@ -54,6 +74,7 @@ export class PiStatusBridge {
 	constructor(
 		private readonly onReport: (report: PiStatusReport) => void,
 		private readonly onForkRequest?: (request: PiForkRequest) => void | Promise<void>,
+		private readonly onPanelRequest?: (request: PiPanelRequest) => Promise<unknown>,
 	) {}
 
 	get isListening(): boolean {
@@ -134,6 +155,9 @@ export class PiStatusBridge {
 			const newline = pending.indexOf("\n");
 			if (newline < 0) return;
 			handled = true;
+			// Panel waits can hold the connection for minutes; the 10s guard only
+			// covers receiving the first line.
+			socket.setTimeout(0);
 			void this.handleLine(pending.slice(0, newline), socket);
 		});
 	}
@@ -152,6 +176,35 @@ export class PiStatusBridge {
 					seq: message.seq,
 				});
 				socket.end();
+				return;
+			}
+
+			if (isWirePanelRequest(message) && message.token === this.token) {
+				try {
+					if (!this.onPanelRequest) throw new Error("Panel requests are unavailable");
+					const result = await this.onPanelRequest({
+						requestId: message.requestId,
+						action: message.action,
+						tabId: message.tabId,
+						tabIds: message.tabIds,
+						text: message.text,
+						model: message.model,
+						sinceMs: message.sinceMs,
+						timeoutMs: message.timeoutMs,
+					});
+					socket.end(
+						`${JSON.stringify({ type: "pi-vscode-panel-result", requestId: message.requestId, ok: true, result })}\n`,
+					);
+				} catch (error) {
+					socket.end(
+						`${JSON.stringify({
+							type: "pi-vscode-panel-result",
+							requestId: message.requestId,
+							ok: false,
+							error: errorMessage(error),
+						})}\n`,
+					);
+				}
 				return;
 			}
 
@@ -234,6 +287,34 @@ function isWireForkRequest(value: unknown): value is WireForkRequest {
 		nonEmptyString(request.sessionId) &&
 		nonEmptyString(request.sessionPath) &&
 		nonEmptyString(request.draftFile)
+	);
+}
+
+const PANEL_ACTIONS = new Set<PiPanelAction>(["create", "prompt", "wait", "list"]);
+
+function isWirePanelRequest(value: unknown): value is WirePanelRequest {
+	if (!value || typeof value !== "object") return false;
+	const request = value as Record<string, unknown>;
+	return (
+		request.type === "pi-vscode-panel" &&
+		nonEmptyString(request.token) &&
+		nonEmptyString(request.requestId) &&
+		typeof request.action === "string" &&
+		PANEL_ACTIONS.has(request.action as PiPanelAction) &&
+		(request.tabId === undefined || nonEmptyString(request.tabId)) &&
+		(request.tabIds === undefined ||
+			(Array.isArray(request.tabIds) &&
+				request.tabIds.length > 0 &&
+				request.tabIds.length <= 32 &&
+				request.tabIds.every(nonEmptyString))) &&
+		(request.model === undefined ||
+			(typeof request.model === "string" && request.model.length > 0 && request.model.length <= 256)) &&
+		(request.text === undefined ||
+			(typeof request.text === "string" && request.text.length > 0 && request.text.length <= MAX_MESSAGE_BYTES)) &&
+		(request.sinceMs === undefined ||
+			(typeof request.sinceMs === "number" && Number.isSafeInteger(request.sinceMs) && request.sinceMs > 0)) &&
+		(request.timeoutMs === undefined ||
+			(typeof request.timeoutMs === "number" && Number.isSafeInteger(request.timeoutMs) && request.timeoutMs > 0))
 	);
 }
 

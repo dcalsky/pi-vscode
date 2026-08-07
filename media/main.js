@@ -204,7 +204,7 @@
 		vscode.postMessage({ type: "resize", id, cols: entry.term.cols, rows: entry.term.rows });
 	}
 
-	function openTerminal(id, sessionId, title) {
+	function openTerminal(id, sessionId, title, noFocus) {
 		let entry = terminals.get(id);
 		if (!entry) {
 			// xterm measures its host on open, so the pane has to be laid out first.
@@ -293,6 +293,11 @@
 			entry.title = title;
 			entry.detached = false;
 			entry.term.reset();
+		}
+		// Agent-created panels open in the background; only the tab bar updates.
+		if (noFocus && activeId && activeId !== id && terminals.has(activeId)) {
+			render();
+			return;
 		}
 		selectTerminal(id);
 	}
@@ -874,7 +879,7 @@
 		const message = event.data;
 		switch (message.type) {
 			case "session-open":
-				openTerminal(message.id, message.sessionId, message.title);
+				openTerminal(message.id, message.sessionId, message.title, message.noFocus);
 				break;
 			case "data":
 				terminals.get(message.id)?.term.write(message.data);
