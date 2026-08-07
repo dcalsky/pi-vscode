@@ -67,6 +67,8 @@ npx @vscode/vsce publish                  # publish the version in package.json
 git commit -am "..., release X.Y.Z"        # after a successful publish
 ```
 
+`vsce publish <bump>` runs `npm version <bump>` internally: it requires a clean working tree and creates its own `X.Y.Z` commit + `vX.Y.Z` tag (push with `git push origin main --follow-tags`).
+
 **pi packages** — per package, from its own directory:
 
 ```bash
