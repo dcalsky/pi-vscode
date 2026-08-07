@@ -1,0 +1,54 @@
+{
+  "name": "pi-vscode-fork",
+  "version": "0.1.2",
+  "description": "Fork a Pi conversation into a new session managed by Pi Coding for VS Code.",
+  "type": "module",
+  "license": "MIT",
+  "author": "dcalsky",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "vscode",
+    "session"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dcalsky/pi-vscode.git",
+    "directory": "plugins/fork"
+  },
+  "homepage": "https://github.com/dcalsky/pi-vscode/tree/main/plugins/fork#readme",
+  "bugs": {
+    "url": "https://github.com/dcalsky/pi-vscode/issues"
+  },
+  "files": [
+    "extensions",
+    "assets",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "npm run typecheck && npm run lint",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.14",
+    "@earendil-works/pi-coding-agent": "^0.83.0",
+    "typescript": "^5.0.0"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}
