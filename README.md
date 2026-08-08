@@ -2,6 +2,8 @@
 
 Run [pi coding agent](https://pi.dev) sessions in VS Code. Each session is a real terminal in a tab inside the Secondary Side Bar, with a session list beside it.
 
+Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=EthanChow.pi-coding).
+
 ![Pi for VS Code](images/snapshot1.jpg)
 ![Fork dialog](images/fork.jpg)
 ![Rewind dialog](images/rewind.jpg)

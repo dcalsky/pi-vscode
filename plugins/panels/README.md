@@ -1,6 +1,10 @@
 # pi-vscode-panels
 
-Panel orchestration for Pi sessions running inside the [Pi VS Code extension](https://github.com/dcalsky/pi-vscode): one Pi session can spawn sibling sessions in background tabs and drive them — prompt, wait for completion, list — the way the herdr CLI lets an agent drive neighboring panes.
+Panel orchestration for Pi sessions running inside [Pi Coding for VS Code](https://marketplace.visualstudio.com/items?itemName=EthanChow.pi-coding): one Pi session can spawn sibling sessions in background tabs and drive them — prompt, wait for completion, list — the way the herdr CLI lets an agent drive neighboring panes.
+
+![An orchestrator session with sibling panels as background tabs](assets/panels-tabs.jpg)
+
+> This package requires [Pi Coding for VS Code](https://marketplace.visualstudio.com/items?itemName=EthanChow.pi-coding). In plain terminals it stays inert.
 
 ## Install
 
@@ -11,7 +15,7 @@ pi install npm:pi-vscode-panels
 pi install ./plugins/panels
 ```
 
-The package loads in every Pi session but registers its tools only in sessions started by the Pi VS Code extension (`PI_VSCODE_STATUS_*` env present). Elsewhere it is inert.
+The package loads in every Pi session but registers its tools only in sessions started by the Pi VS Code extension (`PI_VSCODE_STATUS_*` env present).
 
 ## Tools
 

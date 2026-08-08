@@ -20,6 +20,7 @@
 	"files": [
 		"extensions",
 		"skills",
+		"assets",
 		"README.md"
 	],
 	"publishConfig": {
