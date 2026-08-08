@@ -1,6 +1,6 @@
 {
 	"name": "pi-vscode-panels",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "Orchestrate sibling Pi sessions (panels) inside the Pi VS Code extension: parallel reviews and fix/verify loops",
 	"type": "module",
 	"license": "MIT",
