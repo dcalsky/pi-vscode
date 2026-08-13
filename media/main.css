@@ -7,71 +7,37 @@ body,
 #app {
 	height: 100%;
 	margin: 0;
-	/* VS Code's injected webview stylesheet sets `body { padding: 0 20px }`. */
 	padding: 0;
-	padding-left: 4px;
 	overflow: hidden;
 }
 
 body {
-	/* Both panes sit on the side bar surface: in themes where the editor background is
-	   lighter than the side bar, the pane divider was hard to make out. */
-	--pi-surface: var(--vscode-sideBar-background, var(--vscode-editor-background));
-	/* Narrower than this the terminal stops being usable, so the view scrolls sideways
-	   instead of dropping the session list. */
-	--pi-min-width: 460px;
 	color: var(--vscode-foreground);
-	background: var(--pi-surface);
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
 	font-family: var(--vscode-font-family);
 	font-size: 13px;
-	overflow-x: auto;
-	overflow-y: hidden;
 }
 
-/* The gutter is always reserved so revealing the slider on hover cannot reflow a list. */
+[hidden] {
+	display: none !important;
+}
+
 ::-webkit-scrollbar {
 	width: 10px;
 	height: 10px;
 }
 
 ::-webkit-scrollbar-track,
-::-webkit-scrollbar-corner,
-::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-corner {
 	background: transparent;
 }
 
-#terminal-pane:hover ::-webkit-scrollbar-thumb,
-#sidebar:hover ::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb {
 	background: var(--vscode-scrollbarSlider-background, #79797966);
 }
 
-#terminal-pane:hover ::-webkit-scrollbar-thumb:hover,
-#sidebar:hover ::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
 	background: var(--vscode-scrollbarSlider-hoverBackground, #646464b3);
-}
-
-#terminal-pane:hover ::-webkit-scrollbar-thumb:active,
-#sidebar:hover ::-webkit-scrollbar-thumb:active {
-	background: var(--vscode-scrollbarSlider-activeBackground, #bfbfbf66);
-}
-
-#app {
-	display: grid;
-	/* The explicit row keeps both panes at viewport height so their own lists scroll. */
-	grid-template-rows: minmax(0, 1fr);
-	grid-template-columns: minmax(0, 1fr) minmax(210px, 36%);
-	min-width: var(--pi-min-width);
-	overflow: hidden;
-}
-
-/* Hiding the list is the way to use Pi in a pane narrower than the minimum. */
-#app.sidebar-hidden {
-	grid-template-columns: minmax(0, 1fr);
-	min-width: 0;
-}
-
-[hidden] {
-	display: none !important;
 }
 
 .icon {
@@ -88,7 +54,6 @@ body {
 .icon-button {
 	display: grid;
 	place-items: center;
-	flex: 0 0 24px;
 	width: 24px;
 	height: 24px;
 	padding: 0;
@@ -111,239 +76,12 @@ body {
 	outline-offset: -1px;
 }
 
-/* Terminal pane */
-
-#terminal-pane {
-	display: grid;
-	grid-template-rows: auto minmax(0, 1fr);
-	min-width: 0;
-	min-height: 0;
-	border-right: 1px solid var(--vscode-panel-border);
-}
-
-#tabbar {
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	min-width: 0;
-	height: 38px;
-	padding: 0 6px 0 0;
-}
-
-#tabs {
-	display: flex;
-	align-items: center;
-	flex: 1;
-	gap: 2px;
-	min-width: 0;
-	overflow-x: auto;
-	scrollbar-width: none;
-}
-
-#tabs::-webkit-scrollbar {
-	display: none;
-}
-
-#tabbar-actions {
-	display: flex;
-	align-items: center;
-	gap: 2px;
-}
-
-.tab {
-	display: flex;
-	align-items: center;
-	flex: 0 1 auto;
-	min-width: 64px;
-	max-width: 240px;
-	height: 26px;
-	padding-right: 2px;
-	border-radius: 5px;
-	color: var(--vscode-descriptionForeground);
-	background: transparent;
-}
-
-.tab:hover {
-	background: var(--vscode-toolbar-hoverBackground);
-}
-
-.tab.active {
-	color: var(--vscode-foreground);
-	background: var(--vscode-list-activeSelectionBackground);
-}
-
-.tab-select {
-	flex: 1;
-	min-width: 0;
-	padding: 0 4px 0 8px;
-	border: 0;
-	border-radius: 5px;
-	color: inherit;
-	background: transparent;
-	font: inherit;
-	font-size: 13px;
-	font-weight: 500;
-	text-align: left;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	overflow: hidden;
-	cursor: pointer;
-}
-
-.tab-close {
-	display: grid;
-	place-items: center;
-	flex: 0 0 20px;
-	width: 20px;
-	height: 20px;
-	padding: 0;
-	border: 0;
-	border-radius: 4px;
-	color: inherit;
-	background: transparent;
-	opacity: 0;
-	cursor: pointer;
-}
-
-.tab-close svg {
-	width: 13px;
-	height: 13px;
-}
-
-.tab:hover .tab-close,
-.tab.active .tab-close,
-.tab-close:focus-visible {
-	opacity: 0.85;
-}
-
-.tab-close:hover {
-	background: var(--vscode-toolbar-hoverBackground);
-	opacity: 1;
-}
-
-#terminal-body {
-	position: relative;
-	min-height: 0;
-	background: var(--pi-surface);
-}
-
-#terminal-hosts {
-	position: absolute;
-	inset: 0;
-}
-
-.terminal-host {
-	position: absolute;
-	inset: 0;
-	/* Pi's output starts at column 0, so no left inset here. */
-	padding: 0 0 4px;
-	overflow: hidden;
-}
-
-.xterm {
-	height: 100%;
-}
-
-#find {
-	position: absolute;
-	top: 0;
-	right: 18px;
-	z-index: 2;
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	padding: 4px 4px 4px 6px;
-	border: 1px solid var(--vscode-widget-border, transparent);
-	border-top: none;
-	border-radius: 0 0 4px 4px;
-	background: var(--vscode-editorWidget-background);
-	color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
-	box-shadow: 0 2px 8px var(--vscode-widget-shadow, transparent);
-}
-
-#find-input {
-	width: 140px;
-	padding: 2px 4px;
-	border: 1px solid var(--vscode-input-border, transparent);
-	background: var(--vscode-input-background);
-	color: var(--vscode-input-foreground);
-	font: inherit;
-}
-
-#find-input:focus {
-	outline: 1px solid var(--vscode-focusBorder);
-}
-
-#find-count {
-	min-width: 62px;
-	opacity: 0.8;
-	font-size: 11px;
-	text-align: right;
-}
-
-#empty-state {
-	position: absolute;
-	inset: 0;
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	gap: 4px;
-	padding: 24px;
-	text-align: center;
-}
-
-.empty-title {
-	margin: 0;
-	font-size: 13px;
-	font-weight: 600;
-}
-
-.empty-hint {
-	margin: 0 0 12px;
-	color: var(--vscode-descriptionForeground);
-	font-size: 12px;
-}
-
-.primary-button {
-	height: 26px;
-	padding: 0 12px;
-	border: 0;
-	border-radius: 5px;
-	color: var(--vscode-button-foreground);
-	background: var(--vscode-button-background);
-	font: inherit;
-	font-size: 12px;
-	cursor: pointer;
-}
-
-.primary-button:hover {
-	background: var(--vscode-button-hoverBackground);
-}
-
-/* Sessions sidebar */
-
 #sidebar {
 	display: grid;
 	grid-template-rows: auto auto auto minmax(0, 1fr);
+	height: 100%;
 	min-width: 0;
 	min-height: 0;
-	position: relative;
-	background: var(--pi-surface);
-}
-
-#sidebar-grip {
-	position: absolute;
-	left: -2px;
-	top: 0;
-	bottom: 0;
-	width: 5px;
-	cursor: col-resize;
-	z-index: 5;
-}
-
-#sidebar-grip:hover {
-	background: var(--vscode-focusBorder);
 }
 
 #sidebar-header {
@@ -388,7 +126,6 @@ body {
 	color: var(--vscode-input-foreground);
 	background: transparent;
 	font: inherit;
-	font-size: 13px;
 	outline: 0;
 }
 
@@ -399,7 +136,6 @@ body {
 #sidebar-actions {
 	display: flex;
 	flex-direction: column;
-	gap: 1px;
 	padding: 0 6px 6px;
 }
 
@@ -415,7 +151,6 @@ body {
 	color: var(--vscode-foreground);
 	background: transparent;
 	font: inherit;
-	font-size: 13px;
 	text-align: left;
 	cursor: pointer;
 }
@@ -424,12 +159,9 @@ body {
 	background: var(--vscode-list-hoverBackground);
 }
 
-.sidebar-action .icon {
-	color: var(--vscode-icon-foreground, var(--vscode-foreground));
-	opacity: 0.85;
-}
-
-.action-label {
+.action-label,
+.session-label,
+.group-title {
 	flex: 1;
 	min-width: 0;
 	text-overflow: ellipsis;
@@ -452,34 +184,36 @@ body {
 	font-weight: 500;
 }
 
-.group-toggle {
+.group-toggle,
+.group-more {
 	display: flex;
 	align-items: center;
 	gap: 6px;
 	width: 100%;
-	height: 24px;
 	padding: 0 8px;
 	border: 0;
 	border-radius: 6px;
 	color: var(--vscode-descriptionForeground);
 	background: transparent;
 	font: inherit;
-	font-size: 11px;
-	font-weight: 500;
 	text-align: left;
 	cursor: pointer;
 }
 
-.group-toggle:hover {
-	background: var(--vscode-list-hoverBackground);
+.group-toggle {
+	height: 24px;
+	font-size: 11px;
+	font-weight: 500;
 }
 
-.group-title {
-	flex: 1;
-	min-width: 0;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	overflow: hidden;
+.group-more {
+	height: 28px;
+	font-size: 12px;
+}
+
+.group-toggle:hover,
+.group-more:hover {
+	background: var(--vscode-list-hoverBackground);
 }
 
 .group-chevron {
@@ -527,17 +261,8 @@ body {
 	color: inherit;
 	background: transparent;
 	font: inherit;
-	font-size: 13px;
 	text-align: left;
 	cursor: pointer;
-}
-
-.session-label {
-	flex: 1;
-	min-width: 0;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	overflow: hidden;
 }
 
 .session-status {
@@ -600,36 +325,10 @@ body {
 	cursor: pointer;
 }
 
-.session-action svg {
-	width: 14px;
-	height: 14px;
-}
-
 .session-action:hover,
 .session-action:focus-visible {
 	background: var(--vscode-toolbar-hoverBackground);
 	opacity: 1;
-}
-
-.group-more {
-	display: flex;
-	align-items: center;
-	gap: 9px;
-	width: 100%;
-	height: 28px;
-	padding: 0 8px;
-	border: 0;
-	border-radius: 6px;
-	color: var(--vscode-descriptionForeground);
-	background: transparent;
-	font: inherit;
-	font-size: 12px;
-	text-align: left;
-	cursor: pointer;
-}
-
-.group-more:hover {
-	background: var(--vscode-list-hoverBackground);
 }
 
 .list-empty {
@@ -638,12 +337,10 @@ body {
 	font-size: 12px;
 }
 
-/* Context menu */
-
 #menu {
 	position: fixed;
 	z-index: 10;
-	min-width: 130px;
+	min-width: 150px;
 	padding: 4px;
 	border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border));
 	border-radius: 6px;
@@ -679,15 +376,13 @@ body {
 	cursor: default;
 }
 
-/* Fork / Rewind message picker */
-
 .dialog-scrim {
 	position: fixed;
 	inset: 0;
 	z-index: 20;
 	display: grid;
 	place-items: center;
-	padding: 24px;
+	padding: 16px;
 	background: rgb(0 0 0 / 45%);
 }
 
@@ -695,7 +390,7 @@ body {
 	display: grid;
 	grid-template-rows: auto minmax(96px, 1fr) auto;
 	width: min(560px, 100%);
-	max-height: min(620px, calc(100vh - 48px));
+	max-height: calc(100vh - 32px);
 	min-height: 240px;
 	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
 	border-radius: 8px;
@@ -713,13 +408,21 @@ body {
 .message-dialog-header h2 {
 	margin: 0 0 5px;
 	font-size: 15px;
-	font-weight: 600;
 }
 
-.message-dialog-header p {
+.message-dialog-header p,
+.message-dialog-state {
 	margin: 0;
 	color: var(--vscode-descriptionForeground);
 	font-size: 12px;
+}
+
+.message-dialog-state {
+	margin: 12px 10px;
+}
+
+.message-dialog-state.error {
+	color: var(--vscode-errorForeground);
 }
 
 .message-dialog-list {
@@ -728,34 +431,11 @@ body {
 	overflow-y: auto;
 }
 
-.message-dialog-list:hover::-webkit-scrollbar-thumb {
-	background: var(--vscode-scrollbarSlider-background, #79797966);
-}
-
-.message-dialog-list:hover::-webkit-scrollbar-thumb:hover {
-	background: var(--vscode-scrollbarSlider-hoverBackground, #646464b3);
-}
-
-.message-dialog-list:hover::-webkit-scrollbar-thumb:active {
-	background: var(--vscode-scrollbarSlider-activeBackground, #bfbfbf66);
-}
-
-.message-dialog-state {
-	margin: 12px 10px;
-	color: var(--vscode-descriptionForeground);
-	font-size: 12px;
-}
-
-.message-dialog-state.error {
-	color: var(--vscode-errorForeground);
-}
-
 .message-option {
 	display: flex;
 	align-items: flex-start;
 	gap: 10px;
 	width: 100%;
-	margin: 0;
 	padding: 9px 10px;
 	border: 0;
 	border-radius: 5px;
@@ -766,10 +446,6 @@ body {
 	line-height: 1.45;
 	text-align: left;
 	cursor: pointer;
-}
-
-.message-option + .message-option {
-	margin-top: 2px;
 }
 
 .message-option:hover {
@@ -822,17 +498,9 @@ body {
 	cursor: pointer;
 }
 
-.dialog-button:hover {
-	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
-}
-
 .dialog-button.primary {
 	color: var(--vscode-button-foreground);
 	background: var(--vscode-button-background);
-}
-
-.dialog-button.primary:hover {
-	background: var(--vscode-button-hoverBackground);
 }
 
 .dialog-button:disabled {
@@ -845,8 +513,4 @@ body {
 	.session-status.working {
 		animation: none;
 	}
-}
-
-#app.sidebar-hidden #terminal-pane {
-	border-right: 0;
 }
