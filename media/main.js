@@ -1,27 +1,11 @@
 (() => {
 	const vscode = acquireVsCodeApi();
-	const app = document.getElementById("app");
-	const tabs = document.getElementById("tabs");
-	const hosts = document.getElementById("terminal-hosts");
-	const emptyState = document.getElementById("empty-state");
-	const emptyNew = document.getElementById("empty-new");
-	const sidebar = document.getElementById("sidebar");
 	const sessionList = document.getElementById("session-list");
 	const search = document.getElementById("search");
 	const refresh = document.getElementById("refresh");
 	const newSession = document.getElementById("new-session");
 	const customize = document.getElementById("customize");
-	const newTab = document.getElementById("new-tab");
-	const tabMenu = document.getElementById("tab-menu");
-	const hideSidebar = document.getElementById("hide-sidebar");
-	const showSidebar = document.getElementById("show-sidebar");
 	const menu = document.getElementById("menu");
-	const find = document.getElementById("find");
-	const findInput = document.getElementById("find-input");
-	const findCount = document.getElementById("find-count");
-	const findPrev = document.getElementById("find-prev");
-	const findNext = document.getElementById("find-next");
-	const findClose = document.getElementById("find-close");
 	const messageDialog = document.getElementById("message-dialog");
 	const messageDialogTitle = document.getElementById("message-dialog-title");
 	const messageDialogDescription = document.getElementById("message-dialog-description");
@@ -29,18 +13,18 @@
 	const messageDialogCancel = document.getElementById("message-dialog-cancel");
 	const messageDialogSubmit = document.getElementById("message-dialog-submit");
 
-	const terminals = new Map();
 	const expandedGroups = new Set();
 	const collapsedGroups = new Set();
 	const GROUP_PREVIEW_COUNT = 6;
 	const STOP_LABEL = "Stop Pi";
 	const DELETE_HINT = "Stop Pi and delete this session from disk";
 	const SESSION_ACTION_DISABLED_HINT = "Available until session is done";
-	let activeId;
 	let historySessions = [];
+	let activeTabId;
 	let closeBehaviorStop = false;
 	let messageDialogState;
 	let messageRequestSequence = 0;
+	let sessionRenderSignature = "";
 
 	const statusLabels = {
 		inactive: "Not open",
@@ -61,8 +45,6 @@
 		plus: '<path d="M8 3.4v9.2M3.4 8h9.2"/>',
 		ellipsis:
 			'<circle cx="3.4" cy="8" r="1.05" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.05" fill="currentColor" stroke="none"/><circle cx="12.6" cy="8" r="1.05" fill="currentColor" stroke="none"/>',
-		sidebar: '<rect x="1.6" y="2.6" width="12.8" height="10.8" rx="1.6"/><path d="M10.2 2.6v10.8"/>',
-		search: '<circle cx="6.9" cy="6.9" r="4.1"/><path d="M10 10 13.6 13.6"/>',
 		archive:
 			'<rect x="1.8" y="2.8" width="12.4" height="3.1" rx="1"/><path d="M3.2 6.1v6.1a1.2 1.2 0 0 0 1.2 1.2h7.2a1.2 1.2 0 0 0 1.2-1.2V6.1"/><path d="M6.4 9h3.2"/>',
 		unarchive:
@@ -71,9 +53,8 @@
 		spinner: '<circle cx="8" cy="8" r="5.7" stroke-opacity="0.3"/><path d="M8 2.3a5.7 5.7 0 0 1 5.7 5.7"/>',
 		sliders: '<path d="M2.6 5.2h10.8M2.6 10.8h10.8"/><circle cx="6" cy="5.2" r="1.6"/><circle cx="10.4" cy="10.8" r="1.6"/>',
 		refresh: '<path d="M13.3 8a5.3 5.3 0 1 1-1.6-3.8"/><path d="M13.5 2.7v3.2h-3.2"/>',
-		close: '<path d="M4.4 4.4 11.6 11.6M11.6 4.4 4.4 11.6"/>',
+		search: '<circle cx="6.9" cy="6.9" r="4.1"/><path d="M10 10 13.6 13.6"/>',
 		"chevron-down": '<path d="M4.2 6.4 8 10.1l3.8-3.7"/>',
-		"chevron-up": '<path d="M4.2 9.6 8 5.9l3.8 3.7"/>',
 		"chevron-right": '<path d="M6.4 4.2 10.1 8l-3.7 3.8"/>',
 	};
 
@@ -85,79 +66,7 @@
 		return wrapper;
 	}
 
-	function color(name, fallback) {
-		return getComputedStyle(document.body).getPropertyValue(name).trim() || fallback;
-	}
-
-	// Both panes share the side bar surface so the divider between them stays readable in
-	// themes whose editor background is lighter than the side bar.
-	function paneBackground() {
-		return color("--vscode-sideBar-background", color("--vscode-editor-background", "#1e1e1e"));
-	}
-
-	// The palette VS Code's own terminal uses, read from the theme colors the webview exposes as CSS
-	// variables. Without this xterm falls back to its built-in ANSI colors and Pi's output looks
-	// nothing like the integrated terminal.
-	const ANSI_NAMES = [
-		"black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
-		"brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite",
-	];
-
-	function xtermTheme() {
-		const foreground = color("--vscode-terminal-foreground", color("--vscode-foreground", "#cccccc"));
-		const background = paneBackground();
-		const theme = {
-			background,
-			foreground,
-			cursor: color("--vscode-terminalCursor-foreground", foreground),
-			cursorAccent: color("--vscode-terminalCursor-background", background),
-			selectionBackground: color("--vscode-terminal-selectionBackground", "#264f78"),
-			selectionInactiveBackground: color("--vscode-terminal-inactiveSelectionBackground", "") || undefined,
-			selectionForeground: color("--vscode-terminal-selectionForeground", "") || undefined,
-			scrollbarSliderBackground: color("--vscode-scrollbarSlider-background", "") || undefined,
-			scrollbarSliderHoverBackground: color("--vscode-scrollbarSlider-hoverBackground", "") || undefined,
-			scrollbarSliderActiveBackground: color("--vscode-scrollbarSlider-activeBackground", "") || undefined,
-			// The overview ruler (find-decoration strip next to the scrollbar) draws its 1px
-			// outline in overviewRulerBorder; unset it defaults to the bright foreground, which
-			// reads as an ugly border on the scrollbar. Paint it in the pane background to hide it.
-			overviewRulerBorder: background,
-		};
-		for (const name of ANSI_NAMES) {
-			const value = color(`--vscode-terminal-ansi${name[0].toUpperCase()}${name.slice(1)}`, "");
-			if (value) theme[name] = value;
-		}
-		return theme;
-	}
-
-	// Sent by the extension from terminal.integrated.* / editor.*; see src/xterm-options.ts.
-	let options = { xterm: {}, gpuAcceleration: "auto", unicodeVersion: "11", copyOnSelection: false, kittyKeyboard: true };
-
-	function applyOptions(term) {
-		// Assign key by key: a few options are constructor-only and xterm throws on those.
-		for (const [key, value] of Object.entries({ ...options.xterm, theme: xtermTheme() })) {
-			try {
-				term.options[key] = value;
-			} catch {
-				// Option not settable at runtime; it was applied at construction.
-			}
-		}
-		if (term.unicode) term.unicode.activeVersion = options.unicodeVersion;
-	}
-
-	function loadRenderer(term) {
-		if (options.gpuAcceleration === "off" || typeof WebglAddon === "undefined") return;
-		try {
-			const webgl = new WebglAddon.WebglAddon();
-			// Losing the GL context leaves a blank canvas, so drop back to the DOM renderer.
-			webgl.onContextLoss(() => webgl.dispose());
-			term.loadAddon(webgl);
-		} catch {
-			// No WebGL2 here; xterm keeps its DOM renderer.
-		}
-	}
-
 	let soundContext;
-
 	function unlockSound() {
 		const AudioContext = window.AudioContext || window.webkitAudioContext;
 		if (!AudioContext) return;
@@ -181,226 +90,6 @@
 		oscillator.stop(now + 0.2);
 	}
 
-	function openLink(event, kind, target) {
-		if (event.button !== 0 || (!event.metaKey && !event.ctrlKey)) return;
-		event.preventDefault();
-		vscode.postMessage({ type: "open-link", kind, target });
-	}
-
-	function registerTerminalLinks(term) {
-		// The unified provider must run first because Pi's renderer emits hard-wrapped
-		// URLs as separate PTY rows; a per-row URL provider would otherwise shadow the
-		// reconstructed full range with its first fragment.
-		term.registerLinkProvider(
-			WrappedPathLinks.createPathLinkProvider(term, (event, target, kind) => openLink(event, kind, target)),
-		);
-		term.loadAddon(new WebLinksAddon.WebLinksAddon((event, target) => openLink(event, "url", target)));
-	}
-
-	function sendSize(id) {
-		const entry = terminals.get(id);
-		if (!entry || entry.host.hidden) return;
-		entry.fit.fit();
-		vscode.postMessage({ type: "resize", id, cols: entry.term.cols, rows: entry.term.rows });
-	}
-
-	function openTerminal(id, sessionId, title, noFocus) {
-		let entry = terminals.get(id);
-		if (!entry) {
-			// xterm measures its host on open, so the pane has to be laid out first.
-			hosts.hidden = false;
-			const host = document.createElement("div");
-			host.className = "terminal-host";
-			host.hidden = true;
-			hosts.append(host);
-
-			const term = new Terminal({ ...options.xterm, theme: xtermTheme() });
-			const fit = new FitAddon.FitAddon();
-			term.loadAddon(fit);
-			if (typeof Unicode11Addon !== "undefined") {
-				term.loadAddon(new Unicode11Addon.Unicode11Addon());
-				term.unicode.activeVersion = options.unicodeVersion;
-			}
-			const search = typeof SearchAddon === "undefined" ? undefined : new SearchAddon.SearchAddon();
-			if (search) term.loadAddon(search);
-			registerTerminalLinks(term);
-			term.open(host);
-			loadRenderer(term);
-			// Pi hard-wraps Markdown to the terminal width and emits each row as a
-			// separate physical line, so xterm's copy would insert newlines at the wrap
-			// points. This runs after xterm's own copy handler (registered during open)
-			// and rewrites the clipboard with wrap points joined.
-			term.element.addEventListener("copy", (event) => {
-				if (term.element.classList.contains("column-select")) return;
-				const text = WrappedPathLinks.copySelectionText(term);
-				if (text !== undefined && event.clipboardData) event.clipboardData.setData("text/plain", text);
-			});
-			term.onData((data) => vscode.postMessage({ type: "input", id, data }));
-			term.onSelectionChange(() => {
-				if (!options.copyOnSelection || !term.hasSelection()) return;
-				const text = WrappedPathLinks.copySelectionText(term) ?? term.getSelection();
-				if (text) void navigator.clipboard?.writeText(text).catch(() => undefined);
-			});
-			// See media/ime.js: unmodified punctuation/digit keydowns go through the browser's
-			// native text input so a third-party IME's committed Chinese punctuation lands in
-			// xterm's hidden textarea; this capture-phase listener forwards it to the PTY.
-			// `pendingNativeInput` is set on the keydown and cancelled by the keypress of a
-			// plain ASCII key, which xterm's own _keyPress sends as before, so English typing
-			// is unchanged. (xterm's own input listener only forwards insertText when no
-			// keydown is in flight, so a commit arriving after keyup is still delivered once.)
-			let pendingNativeInput = false;
-			term.textarea.addEventListener(
-				"input",
-				(event) => {
-					if (!pendingNativeInput) return;
-					pendingNativeInput = false;
-					if (event.isComposing || !event.data) return;
-					vscode.postMessage({ type: "input", id, data: event.data });
-				},
-				true,
-			);
-			term.attachCustomKeyEventHandler((event) => {
-				if (event.type !== "keydown") {
-					pendingNativeInput = false;
-					return true;
-				}
-				if (PiIme.nativeInputKey(event)) {
-					pendingNativeInput = true;
-					return false;
-				}
-				if (isFindShortcut(event)) {
-					openFind();
-					return false;
-				}
-				// Cmd+Left/Right on macOS: ^A/^E, Terminal.app style (see media/clipboard.js).
-				const arrow = PiClipboard.arrowAction(event);
-				if (arrow) {
-					vscode.postMessage({ type: "input", id, data: arrow });
-					return false;
-				}
-				// With the Kitty keyboard protocol enabled xterm encodes Shift+Enter itself; without it a
-				// bare CR would submit instead of inserting a new line, so send the CSI u sequence pi expects.
-				if (options.kittyKeyboard || event.key !== "Enter") return true;
-				if (!event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return true;
-				vscode.postMessage({ type: "input", id, data: "\x1b[13;2u" });
-				return false;
-			});
-			host.addEventListener("mousedown", () => term.focus());
-			entry = { host, term, fit, search, sessionId, title, detached: false };
-			terminals.set(id, entry);
-		} else {
-			entry.sessionId = sessionId;
-			entry.title = title;
-			entry.detached = false;
-			entry.term.reset();
-		}
-		// Agent-created panels open in the background; only the tab bar updates.
-		if (noFocus && activeId && activeId !== id && terminals.has(activeId)) {
-			render();
-			return;
-		}
-		selectTerminal(id);
-	}
-
-	function attachedIds() {
-		return [...terminals].filter(([, entry]) => !entry.detached).map(([id]) => id);
-	}
-
-	function selectTerminal(id) {
-		const selected = terminals.get(id);
-		if (!selected) return;
-		selected.detached = false;
-		hosts.hidden = false;
-		closeFind();
-		activeId = id;
-		for (const [tabId, entry] of terminals) entry.host.hidden = tabId !== id;
-		vscode.postMessage({ type: "focus", id });
-		render();
-		requestAnimationFrame(() => {
-			sendSize(id);
-			terminals.get(id)?.term.focus();
-		});
-	}
-
-	function disposeTerminal(id) {
-		const entry = terminals.get(id);
-		if (!entry) return;
-		const index = attachedIds().indexOf(id);
-		entry.term.dispose();
-		entry.host.remove();
-		terminals.delete(id);
-		selectNeighbour(id, index);
-	}
-
-	// Closing a tab keeps Pi running so the session can be reopened from the list.
-	function closeTerminal(id) {
-		const entry = terminals.get(id);
-		if (!entry || entry.detached) return;
-		const index = attachedIds().indexOf(id);
-		entry.detached = true;
-		entry.host.hidden = true;
-		vscode.postMessage({ type: "detach", id });
-		selectNeighbour(id, index);
-	}
-
-	function shutdownTerminal(id) {
-		if (!terminals.has(id)) return;
-		vscode.postMessage({ type: "shutdown", id });
-	}
-
-	// Tab-close paths follow piAgent.closeBehavior; Archive always detaches.
-	function closeTab(id) {
-		if (closeBehaviorStop) shutdownTerminal(id);
-		else closeTerminal(id);
-	}
-
-	function selectNeighbour(closedId, index) {
-		if (activeId !== closedId) {
-			render();
-			return;
-		}
-		activeId = undefined;
-		const remaining = attachedIds();
-		const next = remaining[Math.min(index, remaining.length - 1)];
-		if (next) selectTerminal(next);
-		else render();
-	}
-
-	function archiveTerminal(id) {
-		const entry = terminals.get(id);
-		if (!entry) return;
-		setArchived(entry.sessionId, true);
-	}
-
-	function setArchived(sessionId, archived) {
-		if (!sessionId) return;
-		// Archiving closes the session's tab; Pi keeps running and can be resumed from the list.
-		if (archived) {
-			for (const [id, entry] of terminals) {
-				if (entry.sessionId === sessionId) closeTerminal(id);
-			}
-		}
-		vscode.postMessage({ type: "archive", id: sessionId, archived });
-	}
-
-	// The extension asks for confirmation, then removes the tab and the list entry.
-	function deleteSession(sessionId) {
-		if (!sessionId) return;
-		vscode.postMessage({ type: "delete", id: sessionId });
-	}
-
-	function sessionSummaryForTerminal(id) {
-		const entry = terminals.get(id);
-		if (!entry) return undefined;
-		return (
-			historySessions.find((session) => session.id === entry.sessionId) || {
-				id: entry.sessionId,
-				title: entry.title,
-				state: "starting",
-			}
-		);
-	}
-
 	function sessionHistoryActionItems(session) {
 		if (!session) return [];
 		const available = PiSessionView.sessionActionAvailable(session);
@@ -414,7 +103,14 @@
 	function openMessageDialog(action, session) {
 		if (!PiSessionView.sessionActionAvailable(session)) return;
 		const requestId = `messages-${++messageRequestSequence}`;
-		messageDialogState = { action, sessionId: session.id, requestId, selectedId: undefined, wholeSession: false, messages: [] };
+		messageDialogState = {
+			action,
+			sessionId: session.id,
+			requestId,
+			selectedId: undefined,
+			wholeSession: false,
+			messages: [],
+		};
 		messageDialogTitle.textContent = action === "fork" ? "Fork Session" : "Rewind Session";
 		messageDialogDescription.textContent =
 			action === "fork"
@@ -437,7 +133,12 @@
 
 	function renderMessageDialogMessages(message) {
 		const state = messageDialogState;
-		if (!state || state.requestId !== message.requestId || state.sessionId !== message.sessionId || state.action !== message.action) {
+		if (
+			!state ||
+			state.requestId !== message.requestId ||
+			state.sessionId !== message.sessionId ||
+			state.action !== message.action
+		) {
 			return;
 		}
 		if (message.error) {
@@ -455,9 +156,7 @@
 			setMessageDialogState("No user messages are available in this session.");
 			return;
 		}
-		if (!state.messages.some((entry) => entry.id === state.selectedId)) {
-			state.selectedId = state.messages.at(-1)?.id;
-		}
+		if (!state.messages.some((entry) => entry.id === state.selectedId)) state.selectedId = state.messages.at(-1)?.id;
 		messageDialogList.replaceChildren();
 		if (state.action === "fork") {
 			messageDialogList.append(messageDialogOption(state, { wholeSession: true, text: "Whole Session" }));
@@ -466,9 +165,7 @@
 			messageDialogList.append(messageDialogOption(state, { entryId: entry.id, text: entry.text }));
 		}
 		messageDialogSubmit.disabled = !state.selectedId && !state.wholeSession;
-		const selectedOption = messageDialogList.querySelector(".message-option.selected");
-		selectedOption?.focus();
-		selectedOption?.scrollIntoView({ block: "nearest" });
+		messageDialogList.querySelector(".message-option.selected")?.focus();
 	}
 
 	function messageDialogOption(state, { entryId, wholeSession, text }) {
@@ -487,17 +184,19 @@
 		label.className = "message-text";
 		label.textContent = text;
 		option.append(radio, label);
-		option.addEventListener("click", () => selectMessageDialogOption(state, option));
+		option.addEventListener("click", () => selectMessageDialogOption(option));
 		return option;
 	}
 
-	function selectMessageDialogOption(state, option) {
-		state.selectedId = option.dataset.entryId || undefined;
-		state.wholeSession = Boolean(option.dataset.wholeSession);
+	function selectMessageDialogOption(option) {
+		const state = messageDialogState;
+		if (!state) return;
+		state.wholeSession = option.dataset.wholeSession === "true";
+		state.selectedId = state.wholeSession ? undefined : option.dataset.entryId;
 		for (const candidate of messageDialogList.querySelectorAll(".message-option")) {
-			const isSelected = candidate === option;
-			candidate.classList.toggle("selected", isSelected);
-			candidate.setAttribute("aria-checked", String(isSelected));
+			const selected = candidate === option;
+			candidate.classList.toggle("selected", selected);
+			candidate.setAttribute("aria-checked", String(selected));
 		}
 		messageDialogSubmit.disabled = false;
 	}
@@ -520,75 +219,8 @@
 		closeMessageDialog();
 	}
 
-	function closeActiveSessionOrView() {
-		const active = activeId && terminals.get(activeId);
-		if (active && !active.detached) {
-			closeTab(activeId);
-			return;
-		}
-		vscode.postMessage({ type: "close-view" });
-	}
-
-	function render() {
-		renderTabs();
-		renderSessions();
-		const open = attachedIds().length;
-		emptyState.hidden = open > 0;
-		hosts.hidden = open === 0;
-	}
-
-	function renderTabs() {
-		tabs.replaceChildren();
-		for (const [id, entry] of terminals) {
-			if (entry.detached) continue;
-			const tab = document.createElement("div");
-			tab.className = `tab${id === activeId ? " active" : ""}`;
-			tab.addEventListener("contextmenu", (event) => {
-				event.preventDefault();
-				showMenu(tabMenuItems(id), event.clientX, event.clientY);
-			});
-
-			const select = document.createElement("button");
-			select.type = "button";
-			select.className = "tab-select";
-			select.textContent = entry.title;
-			select.title = entry.title;
-			select.setAttribute("aria-pressed", String(id === activeId));
-			select.addEventListener("click", () => selectTerminal(id));
-
-			const close = document.createElement("button");
-			close.type = "button";
-			close.className = "tab-close";
-			close.title = closeBehaviorStop ? `Close ${entry.title}` : `Close ${entry.title} (Pi keeps running)`;
-			close.setAttribute("aria-label", close.title);
-			close.append(icon("close"));
-			close.addEventListener("click", (event) => {
-				event.stopPropagation();
-				closeTab(id);
-			});
-
-			tab.append(select, close);
-			tabs.append(tab);
-		}
-	}
-
-	function tabMenuItems(id) {
-		return [
-			{ label: "Close", hint: closeBehaviorStop ? "Stop the Pi process and close this tab" : "Close this tab; Pi keeps running", run: () => closeTab(id) },
-			{ label: STOP_LABEL, hint: "Stop the Pi process and close this tab", run: () => shutdownTerminal(id) },
-			...sessionHistoryActionItems(sessionSummaryForTerminal(id)),
-			{ label: "Archive", hint: "Close its tab and file this session under Archive", run: () => archiveTerminal(id) },
-			{ label: "Delete", hint: DELETE_HINT, run: () => deleteSession(terminals.get(id)?.sessionId) },
-		];
-	}
-
-	let sessionRenderSignature = "";
-
-	// The extension pushes history on every output burst (500ms debounce); rebuilding the
-	// list then recreates the spinner element and its CSS animation restarts, which reads
-	// as jank. Rebuild only when the rendered content actually changed.
 	function sessionSignature(groups, nowMs) {
-		const parts = [search.value.trim(), String(activeId)];
+		const parts = [search.value.trim(), String(activeTabId)];
 		for (const group of groups) {
 			parts.push(group.title, collapsedGroups.has(group.title), expandedGroups.has(group.title));
 			for (const session of group.sessions) {
@@ -597,6 +229,7 @@
 					normalizedState(session.state),
 					session.title,
 					Boolean(session.archived),
+					Boolean(session.attached),
 					String(session.tabId),
 					PiSessionView.formatAge(PiSessionView.sessionTimestamp(session), nowMs),
 				);
@@ -626,7 +259,6 @@
 	function sessionGroup(group) {
 		const section = document.createElement("section");
 		section.className = "session-group";
-
 		const collapsed = collapsedGroups.has(group.title);
 		const heading = document.createElement("h2");
 		const toggle = document.createElement("button");
@@ -650,7 +282,6 @@
 		const expanded = expandedGroups.has(group.title);
 		const visible = expanded ? group.sessions : group.sessions.slice(0, GROUP_PREVIEW_COUNT);
 		for (const session of visible) section.append(sessionRow(session));
-
 		if (group.sessions.length > GROUP_PREVIEW_COUNT) {
 			const more = document.createElement("button");
 			more.type = "button";
@@ -672,9 +303,8 @@
 	function sessionRow(session) {
 		const archived = Boolean(session.archived);
 		const state = normalizedState(session.state);
-		const selected = activeId !== undefined && session.tabId === activeId;
+		const selected = activeTabId !== undefined && session.tabId === activeTabId;
 		const age = PiSessionView.formatAge(PiSessionView.sessionTimestamp(session), Date.now());
-
 		const row = document.createElement("div");
 		row.className = `session-row${selected ? " active" : ""}`;
 
@@ -689,10 +319,7 @@
 		label.className = "session-label";
 		label.textContent = session.title;
 		open.append(status, label);
-		open.addEventListener("click", () => {
-			if (session.tabId) selectTerminal(session.tabId);
-			vscode.postMessage({ type: "resume", id: session.id });
-		});
+		open.addEventListener("click", () => vscode.postMessage({ type: "resume", id: session.id }));
 
 		const actions = document.createElement("div");
 		actions.className = "session-actions";
@@ -700,7 +327,6 @@
 		ageLabel.className = "session-age";
 		ageLabel.textContent = age;
 		actions.append(ageLabel);
-
 		const archive = document.createElement("button");
 		archive.type = "button";
 		archive.className = "session-action";
@@ -709,33 +335,40 @@
 		archive.append(icon(archived ? "unarchive" : "archive"));
 		archive.addEventListener("click", (event) => {
 			event.stopPropagation();
-			setArchived(session.id, !archived);
+			vscode.postMessage({ type: "archive", id: session.id, archived: !archived });
 		});
 		actions.append(archive);
-
 		row.append(open, actions);
+
 		row.addEventListener("contextmenu", (event) => {
 			event.preventDefault();
-			const entry = session.tabId ? terminals.get(session.tabId) : undefined;
 			const items = [];
-			if (entry && !entry.detached) {
-				items.push({ label: "Close", hint: closeBehaviorStop ? "Stop the Pi process and close this tab" : "Close this tab; Pi keeps running", run: () => closeTab(session.tabId) });
+			if (session.tabId && session.attached) {
+				items.push({
+					label: "Close terminal",
+					hint: closeBehaviorStop ? "Stop Pi and close the terminal" : "Pi keeps running",
+					run: () =>
+						vscode.postMessage({ type: closeBehaviorStop ? "shutdown" : "detach", id: session.tabId }),
+				});
 			}
-			// A tab id means the extension still has a live Pi process for this session.
 			if (session.tabId) {
 				items.push({
 					label: STOP_LABEL,
-					hint: "Stop the Pi process and close its tab",
-					run: () => shutdownTerminal(session.tabId),
+					hint: "Stop the Pi process and close its terminal",
+					run: () => vscode.postMessage({ type: "shutdown", id: session.tabId }),
 				});
 			}
 			items.push(...sessionHistoryActionItems(session));
 			items.push({
 				label: archived ? "Restore" : "Archive",
-				hint: archived ? "Move this session back to its date group" : "Close its tab and file this session under Archive",
-				run: () => setArchived(session.id, !archived),
+				hint: archived ? "Move this session back to its date group" : "Close its terminal and file it under Archive",
+				run: () => vscode.postMessage({ type: "archive", id: session.id, archived: !archived }),
 			});
-			items.push({ label: "Delete", hint: DELETE_HINT, run: () => deleteSession(session.id) });
+			items.push({
+				label: "Delete",
+				hint: DELETE_HINT,
+				run: () => vscode.postMessage({ type: "delete", id: session.id }),
+			});
 			showMenu(items, event.clientX, event.clientY);
 		});
 		return row;
@@ -745,10 +378,8 @@
 		return Object.prototype.hasOwnProperty.call(statusLabels, value) ? value : "inactive";
 	}
 
-	function showMenu(items, x, y, owner) {
+	function showMenu(items, x, y) {
 		menu.replaceChildren();
-		if (owner) menu.dataset.owner = owner;
-		else delete menu.dataset.owner;
 		for (const item of items) {
 			const button = document.createElement("button");
 			button.type = "button";
@@ -773,286 +404,55 @@
 	function hideMenu() {
 		menu.hidden = true;
 		menu.replaceChildren();
-		delete menu.dataset.owner;
 	}
-
-	// Cmd+F on macOS, Ctrl+Shift+F elsewhere: plain Ctrl+F stays with Pi, matching VS Code's terminal.
-	function isFindShortcut(event) {
-		if (event.key !== "f" && event.key !== "F") return false;
-		return event.metaKey ? !event.ctrlKey : event.ctrlKey && event.shiftKey;
-	}
-
-	function searchOptions(incremental) {
-		return {
-			incremental,
-			decorations: {
-				matchBackground: color("--vscode-terminal-findMatchHighlightBackground", "#ea5c0055"),
-				activeMatchBackground: color("--vscode-terminal-findMatchBackground", "#515c6a"),
-				matchOverviewRuler: color("--vscode-terminalOverviewRuler-findMatchForeground", "#d186167e"),
-				activeMatchColorOverviewRuler: color("--vscode-terminalOverviewRuler-findMatchForeground", "#d18616"),
-			},
-		};
-	}
-
-	function activeSearch() {
-		const entry = activeId && terminals.get(activeId);
-		return entry && !entry.detached ? entry.search : undefined;
-	}
-
-	function runFind(back, incremental) {
-		const search = activeSearch();
-		if (!search) return;
-		const term = findInput.value;
-		if (!term) {
-			search.clearDecorations();
-			findCount.textContent = "No results";
-			return;
-		}
-		if (back) search.findPrevious(term, searchOptions(false));
-		else search.findNext(term, searchOptions(incremental));
-	}
-
-	function openFind() {
-		const search = activeSearch();
-		if (!search) return;
-		if (!search.onResults) {
-			search.onResults = true;
-			search.onDidChangeResults(({ resultIndex, resultCount }) => {
-				findCount.textContent = resultCount ? `${resultIndex + 1} of ${resultCount}` : "No results";
-			});
-		}
-		const selection = terminals.get(activeId)?.term.getSelection();
-		if (selection && !selection.includes("\n")) findInput.value = selection;
-		find.hidden = false;
-		findInput.focus();
-		findInput.select();
-		runFind(false, true);
-	}
-
-	function closeFind() {
-		if (find.hidden) return;
-		find.hidden = true;
-		for (const entry of terminals.values()) entry.search?.clearDecorations();
-		terminals.get(activeId)?.term.focus();
-	}
-
-	function setSidebarVisible(visible) {
-		app.classList.toggle("sidebar-hidden", !visible);
-		// Clear any dragged width so the inline style can't override the collapse above.
-		app.style.gridTemplateColumns = "";
-		sidebar.hidden = !visible;
-		showSidebar.hidden = visible;
-		if (activeId) requestAnimationFrame(() => sendSize(activeId));
-	}
-
-	// Auto-hide the sidebar when the panel gets narrow; never auto-show, the user's toggle wins.
-	const narrow = matchMedia("(max-width: 640px)");
-	narrow.addEventListener("change", () => { if (narrow.matches) setSidebarVisible(false); });
-	if (narrow.matches) setSidebarVisible(false);
-
-	// Drag the sidebar's left edge to resize; clamped so it can't go below the usable minimum.
-	const SIDEBAR_MIN = 210;
-	const grip = document.createElement("div");
-	grip.id = "sidebar-grip";
-	sidebar.append(grip);
-	grip.addEventListener("pointerdown", (e) => {
-		e.preventDefault();
-		grip.setPointerCapture(e.pointerId);
-		const startX = e.clientX;
-		const startW = sidebar.getBoundingClientRect().width;
-		let raf = 0;
-		const move = (ev) => {
-			const w = Math.min(Math.max(startW + startX - ev.clientX, SIDEBAR_MIN), innerWidth * 0.7);
-			app.style.gridTemplateColumns = `minmax(0, 1fr) ${w}px`;
-			if (activeId && !raf) raf = requestAnimationFrame(() => { raf = 0; sendSize(activeId); });
-		};
-		const up = () => {
-			grip.removeEventListener("pointermove", move);
-			grip.removeEventListener("pointerup", up);
-			if (activeId) sendSize(activeId);
-		};
-		grip.addEventListener("pointermove", move);
-		grip.addEventListener("pointerup", up);
-	});
 
 	window.addEventListener("message", (event) => {
 		const message = event.data;
 		switch (message.type) {
-			case "session-open":
-				openTerminal(message.id, message.sessionId, message.title, message.noFocus);
-				break;
-			case "data":
-				terminals.get(message.id)?.term.write(message.data);
-				break;
-			case "select":
-				selectTerminal(message.id);
-				break;
-			case "session-close":
-				disposeTerminal(message.id);
-				break;
-			case "session-meta": {
-				const entry = terminals.get(message.id);
-				if (entry) {
-					entry.sessionId = message.sessionId;
-					entry.title = message.title;
-					render();
-				}
-				break;
-			}
-			case "attention":
-				playAttentionSound();
-				break;
-			case "close-active-session-or-view":
-				closeActiveSessionOrView();
-				break;
 			case "history":
 				renderSessions(message.sessions);
+				break;
+			case "active-session":
+				activeTabId = message.tabId;
+				renderSessions();
 				break;
 			case "user-messages":
 				renderMessageDialogMessages(message);
 				break;
-			case "options":
-				options = message.options;
-				for (const entry of terminals.values()) applyOptions(entry.term);
-				if (activeId) requestAnimationFrame(() => sendSize(activeId));
+			case "attention":
+				playAttentionSound();
 				break;
 			case "close-behavior":
 				closeBehaviorStop = message.stop === true;
-				render();
 				break;
 		}
 	});
 
-	newTab.append(icon("plus"));
-	tabMenu.append(icon("ellipsis"));
-	showSidebar.append(icon("sidebar"));
-	hideSidebar.append(icon("sidebar"));
 	refresh.append(icon("refresh"));
 	customize.append(icon("sliders"));
 	document.querySelector(".search-icon").append(icon("search"));
 	newSession.prepend(icon("plus"));
-
-	const requestNewSession = () => vscode.postMessage({ type: "new" });
-	newSession.addEventListener("click", requestNewSession);
-	newTab.addEventListener("click", requestNewSession);
-	emptyNew.addEventListener("click", requestNewSession);
+	newSession.addEventListener("click", () => vscode.postMessage({ type: "new" }));
 	customize.addEventListener("click", () => vscode.postMessage({ type: "customize" }));
 	refresh.addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
-	hideSidebar.addEventListener("click", () => setSidebarVisible(false));
-	showSidebar.addEventListener("click", () => setSidebarVisible(true));
 	search.addEventListener("input", () => renderSessions());
 	messageDialogCancel.addEventListener("click", closeMessageDialog);
 	messageDialogSubmit.addEventListener("click", submitMessageDialog);
 	messageDialog.addEventListener("pointerdown", (event) => {
 		if (event.target === messageDialog) closeMessageDialog();
 	});
-	tabMenu.addEventListener("click", (event) => {
-		event.stopPropagation();
-		// A second click on the button closes the menu it opened.
-		if (!menu.hidden && menu.dataset.owner === "tab-menu") {
-			hideMenu();
-			return;
-		}
-		const { left, bottom } = tabMenu.getBoundingClientRect();
-		const items = [
-			{ label: "New session", run: requestNewSession },
-			{ label: "Refresh sessions", run: () => vscode.postMessage({ type: "refresh" }) },
-		];
-		if (activeId && terminals.has(activeId)) {
-			items.push(...sessionHistoryActionItems(sessionSummaryForTerminal(activeId)));
-			items.push({ label: "Archive session", run: () => archiveTerminal(activeId) });
-			items.push({ label: "Close session", hint: closeBehaviorStop ? "Stop the Pi process and close this tab" : "Pi keeps running", run: () => closeTab(activeId) });
-			items.push({ label: `${STOP_LABEL} for this session`, run: () => shutdownTerminal(activeId) });
-			items.push({
-				label: "Delete session",
-				hint: DELETE_HINT,
-				run: () => deleteSession(terminals.get(activeId)?.sessionId),
-			});
-		}
-		items.push({
-			label: sidebar.hidden ? "Show sessions" : "Hide sessions",
-			run: () => setSidebarVisible(sidebar.hidden),
-		});
-		showMenu(items, left, bottom + 2, "tab-menu");
-	});
-
 	document.addEventListener("pointerdown", (event) => {
 		unlockSound();
-		// The toggle button is excluded so its own click can close the menu instead of
-		// closing it here and reopening it.
-		if (menu.hidden || menu.contains(event.target) || tabMenu.contains(event.target)) return;
-		hideMenu();
+		if (!menu.hidden && !menu.contains(event.target)) hideMenu();
 	});
 	document.addEventListener("keydown", (event) => {
 		unlockSound();
 		if (event.key !== "Escape") return;
-		if (!messageDialog.hidden) {
-			closeMessageDialog();
-			event.preventDefault();
-			return;
-		}
-		hideMenu();
-	});
-
-	// VS Code's webview wrapper swallows native clipboard keydowns (see media/clipboard.js),
-	// so keyboard copy/paste runs the same document.execCommand route the context menu uses.
-	// The capture phase runs before the wrapper's own window listener, and stopPropagation
-	// keeps the wrapper from also forwarding the key to the workbench.
-	document.addEventListener(
-		"keydown",
-		(event) => {
-			const target = document.activeElement;
-			const xtermTextarea =
-				target instanceof HTMLElement && target.classList.contains("xterm-helper-textarea");
-			const input =
-				target instanceof HTMLInputElement || (target instanceof HTMLTextAreaElement && !xtermTextarea);
-			if (!xtermTextarea && !input) return;
-			let hasSelection = false;
-			if (xtermTextarea) {
-				const entry = activeId && terminals.get(activeId);
-				hasSelection = Boolean(entry && !entry.detached && entry.term.hasSelection());
-			} else {
-				hasSelection = target.selectionStart !== target.selectionEnd;
-			}
-			const action = PiClipboard.clipboardAction(event, hasSelection, { input });
-			if (!action) return;
-			event.preventDefault();
-			event.stopPropagation();
-			if (action === "copyAndClear") {
-				document.execCommand("copy");
-				// Windows terminal behavior: Ctrl+C copies and clears the selection.
-				terminals.get(activeId)?.term.clearSelection();
-			} else {
-				document.execCommand(action);
-			}
-		},
-		true,
-	);
-
-	findPrev.append(icon("chevron-up"));
-	findNext.append(icon("chevron-down"));
-	findClose.append(icon("close"));
-	findInput.addEventListener("input", () => runFind(false, true));
-	findPrev.addEventListener("click", () => runFind(true, false));
-	findNext.addEventListener("click", () => runFind(false, false));
-	findClose.addEventListener("click", closeFind);
-	findInput.addEventListener("keydown", (event) => {
-		if (event.key === "Escape") closeFind();
-		else if (event.key === "Enter") runFind(event.shiftKey, false);
-		else return;
+		if (!messageDialog.hidden) closeMessageDialog();
+		else hideMenu();
 		event.preventDefault();
 	});
 
-	// VS Code rewrites the theme CSS variables on the html element in place, with no event to listen to.
-	const themeObserver = new MutationObserver(() => {
-		for (const entry of terminals.values()) entry.term.options.theme = xtermTheme();
-	});
-	for (const node of [document.documentElement, document.body]) {
-		themeObserver.observe(node, { attributeFilter: ["class", "style"] });
-	}
-
-	new ResizeObserver(() => activeId && requestAnimationFrame(() => sendSize(activeId))).observe(hosts);
-	setInterval(() => renderSessions(), 60000);
-	render();
+	setInterval(() => renderSessions(), 60_000);
 	vscode.postMessage({ type: "ready" });
 })();

@@ -2,15 +2,15 @@
 
 ## Project Overview
 
-VS Code extension that runs [pi](https://pi.dev) sessions in webview terminals (Secondary Side Bar), plus companion opt-in pi packages under `plugins/`.
+VS Code extension that manages [pi](https://pi.dev) sessions from a Secondary Side Bar session list and renders them in native VS Code terminals, plus companion opt-in pi packages under `plugins/`.
 
-**Tech Stack:** TypeScript (extension host, compiled with `tsc`), plain JS webview scripts (no build), node-pty, xterm.js.
+**Tech Stack:** TypeScript (extension host, compiled with `tsc`), plain JS session-list webview (no build), node-pty, VS Code Pseudoterminal API, headless xterm.js for detach/replay.
 
 ### Layout
 
 ```
-src/               # Extension host: sessions, status bridge, view state
-media/             # Webview scripts (xterm.js tabs, session list) — no build step
+src/               # Extension host: sessions, native terminal bridge/replay, status bridge, view state
+media/             # Session-list webview scripts and styles — no terminal renderer, no build step
 resources/         # Pi extension auto-injected into every spawned session (status reporting)
 plugins/           # Companion pi packages, one directory per package
   fork/            #   pi-vscode-fork (published on npm): /fork-with-vscode command
@@ -24,7 +24,8 @@ src/test/          # node:test suites; each file must be listed in package.json 
 - **Bridge protocols have two sides, change both together**:
   - fork: `PiForkRequest` in `src/status-bridge.ts` + `handleForkRequest` in `src/extension.ts` ↔ `plugins/fork/extensions/index.ts`
   - panels: `PiPanelRequest` in `src/status-bridge.ts` + `handlePanelRequest` in `src/extension.ts` ↔ `plugins/panels/extensions/index.ts`
-- **No focus steal** — anything opened programmatically in the webview must keep the user's current tab focused (see `noFocus` in `media/main.js`).
+- **One stable terminal editor** — the locked editor group to the right owns one shared native Pi Terminal Editor. Switching sessions must rebind its `PiPseudoterminal` backend without disposing/recreating the terminal or group; agent-created background panels must not create a Terminal Editor. Closing the shared terminal must also remove its empty dedicated group.
+- **No focus steal** — agent-created/restored terminals must use the native terminal's preserve-focus path (see `noFocus` / `openPresentation` in `src/extension.ts`).
 - Tests: `npm test` runs `tsc` first; add new suites to the `test` script explicitly.
 
 ---

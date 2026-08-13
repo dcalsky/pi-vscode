@@ -32,9 +32,11 @@ import {
 	type PiStatusReport,
 } from "./status-bridge";
 import { win32Spawn } from "./pi-command";
+import { PiPseudoterminal } from "./native-terminal";
 import { httpUrl, resolveFileLink } from "./terminal-links";
+import { TerminalReplay } from "./terminal-replay";
 import { normalizeViewState, setArchived, type PiViewState } from "./view-state";
-import { terminalOptions } from "./xterm-options";
+import { normalizePiTerminalCopy } from "./terminal-copy";
 
 interface RunningSession {
 	tabId: string;
@@ -43,9 +45,12 @@ interface RunningSession {
 	title: string;
 	path?: string;
 	leafId?: string;
-	/** False once its tab is closed: Pi keeps running, but the tab is not restored. */
+	/** True only while this session is bound to the shared Terminal Editor. */
 	attached: boolean;
 	process: pty.IPty;
+	replay: TerminalReplay;
+	cols: number;
+	rows: number;
 }
 
 interface StartSessionOptions {
@@ -54,6 +59,8 @@ interface StartSessionOptions {
 	reportError?: boolean;
 	/** Agent-created panels open in the background without stealing focus. */
 	noFocus?: boolean;
+	/** Run the session without creating a Terminal Editor presentation. */
+	noPresentation?: boolean;
 	/** Passed to `pi --model` for agent-created panels. */
 	model?: string;
 }
@@ -63,25 +70,31 @@ interface PanelWaiter {
 	resolve: () => void;
 }
 
+class PiTerminalLink extends vscode.TerminalLink {
+	constructor(
+		startIndex: number,
+		length: number,
+		readonly kind: "file" | "url",
+		readonly target: string,
+	) {
+		super(startIndex, length, target);
+	}
+}
+
 type SessionHistoryAction = "fork" | "rewind";
 
 type ClientMessage =
 	| { type: "ready" }
 	| { type: "new" }
-	| { type: "close-view" }
 	| { type: "customize" }
-	| { type: "input"; id: string; data: string }
-	| { type: "resize"; id: string; cols: number; rows: number }
 	| { type: "refresh" }
 	| { type: "resume"; id: string }
-	| { type: "focus"; id: string }
 	| { type: "detach"; id: string }
 	| { type: "shutdown"; id: string }
 	| { type: "delete"; id: string }
 	| { type: "archive"; id: string; archived: boolean }
 	| { type: "load-user-messages"; action: SessionHistoryAction; id: string; requestId: string }
-	| { type: "session-history-action"; action: SessionHistoryAction; id: string; entryId?: string }
-	| { type: "open-link"; kind: "file" | "url"; target: string };
+	| { type: "session-history-action"; action: SessionHistoryAction; id: string; entryId?: string };
 
 const PI_VIEW_ID = "piAgent.view";
 const PI_CONTAINER_COMMAND = "workbench.view.extension.piAgent";
@@ -112,6 +125,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand("piAgent.open", () => provider.open()),
 		vscode.commands.registerCommand("piAgent.newSession", () => provider.newSession()),
 		vscode.commands.registerCommand(PI_CLOSE_SESSION_OR_VIEW_COMMAND, () => provider.closeSessionOrView()),
+		vscode.commands.registerCommand("piAgent.copyTerminalSelection", () => provider.copyTerminalSelection()),
 	);
 }
 
@@ -131,7 +145,7 @@ function currentWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
 
 class PiViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
 	private view: vscode.WebviewView | undefined;
-	private panel: PiPanel | undefined;
+	private manager: PiSessionManager | undefined;
 	private cwd: string | undefined;
 	private disposed = false;
 
@@ -150,59 +164,62 @@ class PiViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
 		this.cwd = folder.uri.fsPath;
 		await vscode.commands.executeCommand(PI_CONTAINER_COMMAND);
 		this.view?.show();
-		this.createPanel();
+		this.createManager();
 	}
 
 	closeSessionOrView(): void {
-		this.panel?.closeActiveSessionOrView();
+		this.manager?.closeActiveSessionOrView();
+	}
+
+	async copyTerminalSelection(): Promise<void> {
+		if (this.manager) await this.manager.copyTerminalSelection();
+		else await vscode.commands.executeCommand("workbench.action.terminal.copySelection");
 	}
 
 	async newSession(): Promise<void> {
-		if (!this.panel) {
+		if (!this.manager) {
 			await this.open();
 			return;
 		}
-		this.panel.startNewSession();
+		this.manager.startNewSession();
 	}
 
 	resolveWebviewView(webviewView: vscode.WebviewView): void {
 		if (this.disposed) return;
 		this.view = webviewView;
+		this.createManager();
+		this.manager?.attachView(webviewView);
 		webviewView.onDidDispose(() => {
 			if (this.view !== webviewView) return;
 			this.view = undefined;
-			this.panel?.dispose();
+			this.manager?.detachView(webviewView);
 		});
-		this.createPanel();
 	}
 
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
-		this.panel?.dispose();
-		this.panel = undefined;
+		this.manager?.dispose();
+		this.manager = undefined;
 		this.view = undefined;
 	}
 
-	private createPanel(): void {
-		if (this.disposed || this.panel || !this.view) return;
+	private createManager(): void {
+		if (this.disposed || this.manager) return;
 		const cwd = this.cwd ?? currentWorkspaceFolder()?.uri.fsPath;
 		if (!cwd) {
-			this.view.webview.html = "<!doctype html><body>Open a workspace folder to use Pi.</body>";
+			if (this.view) this.view.webview.html = "<!doctype html><body>Open a workspace folder to use Pi.</body>";
 			return;
 		}
 
 		this.cwd = cwd;
-		let panel: PiPanel;
-		panel = new PiPanel(this.extensionUri, cwd, this.view, this.memento, () => {
-			if (this.panel === panel) this.panel = undefined;
-		});
-		this.panel = panel;
+		this.manager = new PiSessionManager(this.extensionUri, cwd, this.memento);
 	}
 }
 
-class PiPanel implements vscode.Disposable {
+class PiSessionManager implements vscode.Disposable {
 	private readonly disposables: vscode.Disposable[] = [];
+	private readonly viewDisposables: vscode.Disposable[] = [];
 	private readonly sessions = new Map<string, RunningSession>();
 	private readonly history = new Map<string, PiSession>();
 	private readonly sessionStates = new Map<string, PiSessionState>();
@@ -212,25 +229,26 @@ class PiPanel implements vscode.Disposable {
 	private readonly panelWaiters = new Set<PanelWaiter>();
 	private readonly replacingProcesses = new Set<pty.IPty>();
 	private readonly sessionActions = new Set<string>();
-	private readonly messageQueue: object[] = [];
 	private readonly pendingStarts: Array<{ id: string; sessionPath?: string; options?: StartSessionOptions }> = [];
 	private readonly statusBridge: PiStatusBridge;
 	private viewState: PiViewState;
+	private terminal: vscode.Terminal | undefined;
+	private pseudoterminal: PiPseudoterminal | undefined;
+	private presentedSession: RunningSession | undefined;
+	private terminalEditorGroup: vscode.TabGroup | undefined;
+	private terminalEditorViewColumn: vscode.ViewColumn | undefined;
 	private refreshTimer: NodeJS.Timeout | undefined;
 	private recoveringStart = false;
 	private historyWatchSyncing = false;
 	private statusBridgeReady = false;
-	private ready = false;
+	private view: vscode.WebviewView | undefined;
+	private viewReady = false;
 	private disposed = false;
-	private cols = 80;
-	private rows = 24;
 
 	constructor(
 		private readonly extensionUri: vscode.Uri,
 		private readonly cwd: string,
-		private readonly panel: vscode.WebviewView,
 		private readonly memento: vscode.Memento,
-		private readonly onDispose: () => void,
 	) {
 		this.viewState = normalizeViewState(this.memento.get(PI_VIEW_STATE_KEY));
 		this.statusBridge = new PiStatusBridge(
@@ -238,28 +256,45 @@ class PiPanel implements vscode.Disposable {
 			(request) => this.handleForkRequest(request),
 			(request) => this.handlePanelRequest(request),
 		);
-		this.panel.webview.options = {
-			enableScripts: true,
-			localResourceRoots: [
-				vscode.Uri.joinPath(extensionUri, "media"),
-				vscode.Uri.joinPath(extensionUri, "node_modules"),
-			],
-		};
-		this.panel.webview.html = webviewHtml(this.panel.webview, extensionUri);
-		this.postTerminalOptions();
-		this.postCloseBehavior();
 		vscode.workspace.onDidChangeConfiguration(
 			(event) => {
-				if (event.affectsConfiguration("terminal.integrated") || event.affectsConfiguration("editor")) {
-					this.postTerminalOptions();
-				}
 				if (event.affectsConfiguration("piAgent.closeBehavior")) this.postCloseBehavior();
 			},
 			undefined,
 			this.disposables,
 		);
-		this.panel.webview.onDidReceiveMessage((message: unknown) => void this.receive(message), undefined, this.disposables);
-		this.panel.onDidDispose(() => this.dispose(), undefined, this.disposables);
+		vscode.window.onDidChangeActiveTerminal(
+			(terminal) => {
+				const session = terminal ? this.sessionForTerminal(terminal) : undefined;
+				if (session && terminal) {
+					this.setFocusedSession(session.tabId);
+					const group = vscode.window.tabGroups.activeTabGroup;
+					if (group.activeTab?.input instanceof vscode.TabInputTerminal) {
+						this.terminalEditorGroup = group;
+						this.terminalEditorViewColumn = group.viewColumn;
+						void vscode.commands.executeCommand("workbench.action.lockEditorGroup");
+					}
+				}
+				this.postActiveSession(session?.tabId);
+			},
+			undefined,
+			this.disposables,
+		);
+		this.disposables.push(
+			vscode.window.registerTerminalLinkProvider({
+				provideTerminalLinks: (context) => {
+					const session = this.sessionForTerminal(context.terminal);
+					if (!session) return [];
+					return session.replay.linksForLine(context.line).then((links) =>
+						links.map((link) => new PiTerminalLink(link.startIndex, link.length, link.kind, link.target)),
+					);
+				},
+				handleTerminalLink: (link) => {
+					const piLink = link as PiTerminalLink;
+					return this.openLink(piLink.kind, piLink.target);
+				},
+			}),
+		);
 
 		void this.refreshHistory();
 		void this.statusBridge
@@ -275,6 +310,28 @@ class PiPanel implements vscode.Disposable {
 			});
 	}
 
+	attachView(view: vscode.WebviewView): void {
+		if (this.disposed) return;
+		this.clearViewDisposables();
+		this.view = view;
+		this.viewReady = false;
+		view.webview.options = {
+			enableScripts: true,
+			localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "media")],
+		};
+		view.webview.html = webviewHtml(view.webview, this.extensionUri);
+		this.viewDisposables.push(
+			view.webview.onDidReceiveMessage((message: unknown) => void this.receive(message)),
+		);
+	}
+
+	detachView(view: vscode.WebviewView): void {
+		if (this.view !== view) return;
+		this.view = undefined;
+		this.viewReady = false;
+		this.clearViewDisposables();
+	}
+
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
@@ -283,25 +340,28 @@ class PiPanel implements vscode.Disposable {
 		for (const watcher of this.historyWatchers.values()) watcher.close();
 		this.historyWatchers.clear();
 		void this.statusBridge.dispose();
-		for (const session of this.sessions.values()) session.process.kill();
+		if (this.presentedSession) this.closePresentation(this.presentedSession);
+		for (const session of this.sessions.values()) {
+			session.process.kill();
+			session.replay.dispose();
+		}
 		this.sessions.clear();
 		this.pendingStarts.length = 0;
+		this.clearViewDisposables();
 		for (const disposable of this.disposables) disposable.dispose();
-		this.onDispose();
 	}
 
 	private async receive(message: unknown): Promise<void> {
 		if (!isClientMessage(message) || this.disposed) return;
 		switch (message.type) {
 			case "ready":
-				this.ready = true;
-				for (const queued of this.messageQueue.splice(0)) void this.panel.webview.postMessage(queued);
+				this.viewReady = true;
+				this.postHistory();
+				this.postCloseBehavior();
+				this.postActiveSession(this.activeSession()?.tabId);
 				break;
 			case "new":
 				this.startNewSession();
-				break;
-			case "close-view":
-				await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar");
 				break;
 			case "customize":
 				await vscode.commands.executeCommand("workbench.action.openSettings", "piAgent");
@@ -324,25 +384,17 @@ class PiPanel implements vscode.Disposable {
 			case "session-history-action":
 				await this.runSessionHistoryAction(message.action, message.id, message.entryId);
 				break;
-			case "focus":
-				this.setFocusedSession(message.id);
-				break;
-			case "input":
-				if (message.data.length <= 1024 * 1024) this.sessions.get(message.id)?.process.write(message.data);
-				break;
-			case "resize":
-				this.resize(message.id, message.cols, message.rows);
-				break;
 			case "refresh":
 				await this.refreshHistory();
 				break;
 			case "resume":
 				this.resumeSession(message.id);
 				break;
-			case "open-link":
-				await this.openLink(message.kind, message.target);
-				break;
 		}
+	}
+
+	private clearViewDisposables(): void {
+		for (const disposable of this.viewDisposables.splice(0)) disposable.dispose();
 	}
 
 	private async openLink(kind: "file" | "url", target: string): Promise<void> {
@@ -380,16 +432,23 @@ class PiPanel implements vscode.Disposable {
 			this.startNewSession();
 			return;
 		}
-		for (const record of restored) this.startSession(record.id, record.path);
-		// The webview reports which tab it settled on, so focus is persisted again from there.
-		const focusedSession = focused ? this.openSessionFor(focused) : undefined;
-		if (focusedSession) this.post({ type: "select", id: focusedSession.tabId });
+		const visible = restored.find((record) => record.id === focused) ?? restored[0];
+		for (const record of restored) {
+			this.startSession(record.id, record.path, {
+				noFocus: true,
+				noPresentation: record.id !== visible.id,
+			});
+		}
+		if (this.openSessionFor(visible.id)) {
+			this.viewState = { ...this.viewState, focusedSessionId: visible.id };
+			this.persistViewState();
+		}
 	}
 
 	private resumeSession(id: string): void {
 		const openSession = this.openSessionFor(id);
 		if (openSession) {
-			this.post({ type: "select", id: openSession.tabId });
+			this.openPresentation(openSession, false);
 			return;
 		}
 		const session = this.history.get(id);
@@ -401,7 +460,9 @@ class PiPanel implements vscode.Disposable {
 		const session = this.sessions.get(tabId);
 		if (!session || !session.attached) return;
 		session.attached = false;
+		this.closePresentation(session);
 		this.persistViewState();
+		this.postHistory();
 	}
 
 	private shutdownSession(tabId: string): void {
@@ -411,8 +472,9 @@ class PiPanel implements vscode.Disposable {
 		this.statusSequences.delete(tabId);
 		this.sessionStates.set(session.sessionId, "inactive");
 		this.noteTabState(tabId, "inactive");
+		this.closePresentation(session);
 		session.process.kill();
-		this.post({ type: "session-close", id: tabId });
+		session.replay.dispose();
 		this.persistViewState();
 		this.postHistory();
 	}
@@ -447,8 +509,12 @@ class PiPanel implements vscode.Disposable {
 		this.postHistory();
 	}
 
-	// Archiving only files the session under Archive; the webview closes its tab, Pi keeps running.
+	// Archiving files the session under Archive and closes its native terminal; Pi keeps running.
 	private archiveSession(sessionId: string, archived: boolean): void {
+		if (archived) {
+			const open = this.openSessionFor(sessionId);
+			if (open?.attached) this.detachSession(open.tabId);
+		}
 		this.viewState = setArchived(this.viewState, sessionId, archived);
 		this.persistViewState();
 		this.postHistory();
@@ -600,6 +666,8 @@ class PiPanel implements vscode.Disposable {
 				finish(error instanceof Error ? error : new Error(String(error)));
 			}
 		});
+		this.closePresentation(session);
+		session.replay.dispose();
 	}
 
 	private setFocusedSession(tabId: string): void {
@@ -609,6 +677,7 @@ class PiPanel implements vscode.Disposable {
 		session.attached = true;
 		this.viewState = { ...this.viewState, focusedSessionId: session.sessionId };
 		this.persistViewState();
+		this.postActiveSession(tabId);
 	}
 
 	private persistViewState(): void {
@@ -662,7 +731,12 @@ class PiPanel implements vscode.Disposable {
 	/** Like `herdr agent start`: open a background tab and answer once its Pi accepts input. */
 	private async panelCreate(model: string | undefined): Promise<{ tabId: string; sessionId: string }> {
 		const id = randomUUID();
-		const failure = this.startSession(id, undefined, { noFocus: true, reportError: false, model });
+		const failure = this.startSession(id, undefined, {
+			noFocus: true,
+			noPresentation: true,
+			reportError: false,
+			model,
+		});
 		if (failure) throw new Error(failure);
 		const deadline = Date.now() + PANEL_READY_TIMEOUT_MS;
 		for (;;) {
@@ -788,9 +862,12 @@ class PiPanel implements vscode.Disposable {
 		}
 
 		let spawnedProcess: pty.IPty | undefined;
+		let replay: TerminalReplay | undefined;
 		try {
 			preparePty();
 			const tabId = id;
+			const cols = 80;
+			const rows = 24;
 			const args = sessionPath ? ["--session", sessionPath] : ["--session-id", id];
 			if (options.model) args.push("--model", options.model);
 			if (this.statusBridge.isListening) args.push("--extension", piStatusExtensionPath(this.extensionUri));
@@ -801,11 +878,17 @@ class PiPanel implements vscode.Disposable {
 					: {};
 			const file = effectivePiCommand(command);
 			const spawn = process.platform === "win32" ? win32Spawn(file, args) : { file, args };
+			const scrollback = clamp(
+				vscode.workspace.getConfiguration("terminal.integrated").get<number>("scrollback", 1000),
+				0,
+				100_000,
+			);
+			replay = new TerminalReplay(cols, rows, scrollback);
 			const child = pty.spawn(spawn.file, spawn.args, {
 				cwd: this.cwd,
 				name: "xterm-256color",
-				cols: this.cols,
-				rows: this.rows,
+				cols,
+				rows,
 				env: { ...terminalEnvironment(), ...this.statusBridge.environmentFor(tabId), ...draftEnvironment },
 			});
 			spawnedProcess = child;
@@ -816,19 +899,23 @@ class PiPanel implements vscode.Disposable {
 				startedAtMs: Date.now(),
 				title,
 				path: sessionPath,
-				attached: true,
+				attached: options.noPresentation !== true,
 				process: child,
+				replay,
+				cols,
+				rows,
 			};
 			this.sessions.set(tabId, session);
 			this.statusSequences.delete(tabId);
 			this.sessionStates.set(id, "starting");
 			this.noteTabState(tabId, "starting");
 			child.onData((data) => {
-				this.post({ type: "data", id: tabId, data });
+				const sequence = replay!.write(data);
+				if (this.presentedSession === session) this.pseudoterminal?.write(data, sequence);
 				this.refreshSoon();
 			});
 			child.onExit(({ exitCode }) => this.handleExit(tabId, child, exitCode));
-			this.post({ type: "session-open", id: tabId, sessionId: id, title, noFocus: options.noFocus === true });
+			if (options.noPresentation !== true) this.openPresentation(session, options.noFocus === true);
 			this.persistViewState();
 			this.postHistory();
 			this.refreshSoon();
@@ -838,12 +925,184 @@ class PiPanel implements vscode.Disposable {
 			this.sessionStates.delete(id);
 			this.statusSequences.delete(id);
 			spawnedProcess?.kill();
+			replay?.dispose();
 			const failure = `Could not start pi: ${errorMessage(error)}`;
 			if (options.reportError !== false) {
 				// Auto-detect pi (PATH, npm global dir) and restart; only prompt when that fails.
 				void this.recoverStart(id, sessionPath, options, failure);
 			}
 			return failure;
+		}
+	}
+
+	private openPresentation(session: RunningSession, preserveFocus: boolean): void {
+		if (this.disposed || this.sessions.get(session.tabId) !== session) return;
+		if (this.presentedSession && this.presentedSession !== session) this.presentedSession.attached = false;
+		this.presentedSession = session;
+		session.attached = true;
+
+		let terminal = this.terminal;
+		let pseudoterminal = this.pseudoterminal;
+		if (terminal && pseudoterminal) {
+			pseudoterminal.switchBackend(this.terminalBackend(session, pseudoterminal), session.title);
+		} else {
+			const existingGroups = new Set(vscode.window.tabGroups.all);
+			const viewColumn =
+				this.terminalEditorViewColumn ?? this.reusableEmptyEditorGroup() ?? vscode.ViewColumn.Beside;
+			pseudoterminal = new PiPseudoterminal({
+				replay: () => session.replay.snapshot(),
+				input: (data) => {
+					if (this.presentedSession === session && data.length <= 1024 * 1024) session.process.write(data);
+				},
+				resize: (cols, rows) => this.resizeSession(session, cols, rows),
+				close: () => this.handlePresentationClosed(pseudoterminal!),
+			});
+			terminal = vscode.window.createTerminal({
+				name: session.title,
+				pty: pseudoterminal,
+				location: {
+					viewColumn,
+					preserveFocus,
+				},
+				iconPath: new vscode.ThemeIcon("terminal"),
+				isTransient: true,
+			});
+			this.pseudoterminal = pseudoterminal;
+			this.terminal = terminal;
+			this.rememberTerminalEditorGroup(terminal, true, existingGroups, viewColumn);
+		}
+		terminal.show(preserveFocus);
+		if (!preserveFocus) {
+			this.setFocusedSession(session.tabId);
+		}
+		this.persistViewState();
+		this.postHistory();
+	}
+
+	private reusableEmptyEditorGroup(): vscode.ViewColumn | undefined {
+		const activeColumn = vscode.window.tabGroups.activeTabGroup.viewColumn;
+		const emptyGroups = vscode.window.tabGroups.all.filter((group) => group.tabs.length === 0);
+		return (
+			emptyGroups
+				.filter((group) => group.viewColumn >= activeColumn)
+				.sort((left, right) => left.viewColumn - right.viewColumn)[0] ??
+			emptyGroups.sort((left, right) => right.viewColumn - left.viewColumn)[0]
+		)?.viewColumn;
+	}
+
+	private terminalBackend(session: RunningSession, pseudoterminal: PiPseudoterminal) {
+		return {
+			replay: () => session.replay.snapshot(),
+			input: (data: string) => {
+				if (this.presentedSession === session && data.length <= 1024 * 1024) session.process.write(data);
+			},
+			resize: (cols: number, rows: number) => this.resizeSession(session, cols, rows),
+			close: () => this.handlePresentationClosed(pseudoterminal),
+		};
+	}
+
+	private rememberTerminalEditorGroup(
+		terminal: vscode.Terminal,
+		lock: boolean,
+		existingGroups: ReadonlySet<vscode.TabGroup>,
+		expectedColumn: vscode.ViewColumn,
+	): void {
+		let subscription: vscode.Disposable | undefined;
+		let timer: NodeJS.Timeout | undefined;
+		const finish = () => {
+			subscription?.dispose();
+			if (timer) clearTimeout(timer);
+		};
+		const locate = () => {
+			if (this.disposed || this.terminal !== terminal) return finish();
+			const active = vscode.window.tabGroups.activeTabGroup;
+			const group =
+				(vscode.window.activeTerminal === terminal && active.activeTab?.input instanceof vscode.TabInputTerminal
+					? active
+					: vscode.window.tabGroups.all.find(
+							(candidate) =>
+								candidate.activeTab?.input instanceof vscode.TabInputTerminal &&
+								(!existingGroups.has(candidate) || candidate.viewColumn === expectedColumn),
+						));
+			if (!group) return;
+			this.terminalEditorGroup = group;
+			this.terminalEditorViewColumn = group.viewColumn;
+			finish();
+			// The command targets the active group. Background terminals rely on
+			// VS Code's built-in terminal-editor auto-lock instead of stealing focus.
+			if (lock && group.isActive) void vscode.commands.executeCommand("workbench.action.lockEditorGroup");
+		};
+		subscription = vscode.window.tabGroups.onDidChangeTabs(locate);
+		timer = setTimeout(finish, 2_000);
+		queueMicrotask(locate);
+	}
+
+	private handlePresentationClosed(pseudoterminal: PiPseudoterminal): void {
+		if (this.pseudoterminal !== pseudoterminal) return;
+		const session = this.presentedSession;
+		this.pseudoterminal = undefined;
+		this.terminal = undefined;
+		this.presentedSession = undefined;
+		this.closeEmptyTerminalEditorGroup();
+		if (!session) return;
+		session.attached = false;
+		if (this.disposed || this.sessions.get(session.tabId) !== session) return;
+		if (this.replacingProcesses.has(session.process)) return;
+		const stop = vscode.workspace.getConfiguration("piAgent").get<string>("closeBehavior", "detach") === "stop";
+		if (stop) this.shutdownSession(session.tabId);
+		else {
+			this.persistViewState();
+			this.postHistory();
+			this.postActiveSession(this.activeSession()?.tabId);
+		}
+	}
+
+	private closePresentation(session: RunningSession, exitCode?: number): void {
+		if (this.presentedSession !== session) return;
+		const terminal = this.terminal;
+		const pseudoterminal = this.pseudoterminal;
+		this.presentedSession = undefined;
+		this.terminal = undefined;
+		this.pseudoterminal = undefined;
+		pseudoterminal?.end(exitCode);
+		terminal?.dispose();
+		this.closeEmptyTerminalEditorGroup();
+	}
+
+	private closeEmptyTerminalEditorGroup(): void {
+		const group = this.terminalEditorGroup;
+		this.terminalEditorGroup = undefined;
+		this.terminalEditorViewColumn = undefined;
+		if (!group) return;
+		let subscription: vscode.Disposable | undefined;
+		let timer: NodeJS.Timeout | undefined;
+		const finish = () => {
+			subscription?.dispose();
+			if (timer) clearTimeout(timer);
+		};
+		const closeIfEmpty = () => {
+			if (!vscode.window.tabGroups.all.includes(group)) return finish();
+			if (group.tabs.length !== 0) return;
+			finish();
+			void vscode.window.tabGroups.close(group, true);
+		};
+		subscription = vscode.window.tabGroups.onDidChangeTabs(closeIfEmpty);
+		timer = setTimeout(finish, 2_000);
+		queueMicrotask(closeIfEmpty);
+	}
+
+	private resizeSession(session: RunningSession, cols: number, rows: number): void {
+		if (this.sessions.get(session.tabId) !== session) return;
+		const nextCols = clamp(Math.round(cols), 2, 1000);
+		const nextRows = clamp(Math.round(rows), 1, 500);
+		if (session.cols === nextCols && session.rows === nextRows) return;
+		session.cols = nextCols;
+		session.rows = nextRows;
+		session.replay.resize(nextCols, nextRows);
+		try {
+			session.process.resize(nextCols, nextRows);
+		} catch {
+			// The process may have exited between VS Code's resize event and this write.
 		}
 	}
 
@@ -941,19 +1200,13 @@ class PiPanel implements vscode.Disposable {
 		this.statusSequences.delete(tabId);
 		this.sessionStates.set(session.sessionId, "inactive");
 		this.noteTabState(tabId, "inactive");
+		session.attached = false;
+		this.closePresentation(session, exitCode);
+		session.replay.dispose();
 		this.persistViewState();
 		this.postHistory();
-		// Pi owns the session tab's lifetime: once it exits there is nothing left to show.
-		this.post({ type: "session-close", id: tabId });
 		if (exitCode !== 0) void vscode.window.showWarningMessage(`Pi exited with code ${exitCode}.`);
 		this.refreshSoon();
-	}
-
-	private resize(id: string, cols: number, rows: number): void {
-		if (!Number.isInteger(cols) || !Number.isInteger(rows)) return;
-		this.cols = clamp(cols, 2, 1000);
-		this.rows = clamp(rows, 1, 500);
-		this.sessions.get(id)?.process.resize(this.cols, this.rows);
 	}
 
 	private async refreshHistory(): Promise<void> {
@@ -1007,11 +1260,11 @@ class PiPanel implements vscode.Disposable {
 	private setSessionTitle(session: RunningSession, title: string): void {
 		if (session.title === title) return;
 		session.title = title;
-		this.postSessionMeta(session);
+		if (this.presentedSession === session) this.pseudoterminal?.rename(title);
 	}
 
 	private postSessionMeta(session: RunningSession): void {
-		this.post({ type: "session-meta", id: session.tabId, sessionId: session.sessionId, title: session.title });
+		if (this.presentedSession === session) this.pseudoterminal?.rename(session.title);
 	}
 
 	private async syncHistoryWatchers(): Promise<void> {
@@ -1056,6 +1309,7 @@ class PiPanel implements vscode.Disposable {
 				updatedAtMs: mtimeMs,
 				archived: archived.has(id),
 				tabId: openSession?.tabId,
+				attached: openSession?.attached === true,
 				state: this.sessionStates.get(id) ?? (openSession ? "starting" : "inactive"),
 			};
 		});
@@ -1068,6 +1322,7 @@ class PiPanel implements vscode.Disposable {
 				updatedAtMs: session.startedAtMs,
 				archived: archived.has(session.sessionId),
 				tabId: session.tabId,
+				attached: session.attached,
 				state: this.sessionStates.get(session.sessionId) ?? "starting",
 			});
 		}
@@ -1083,30 +1338,40 @@ class PiPanel implements vscode.Disposable {
 		}, 500);
 	}
 
-	private postTerminalOptions(): void {
-		this.post({
-			type: "options",
-			options: terminalOptions((section) => vscode.workspace.getConfiguration(section)),
-		});
-	}
-
 	private postCloseBehavior(): void {
 		const stop = vscode.workspace.getConfiguration("piAgent").get<string>("closeBehavior", "detach") === "stop";
 		this.post({ type: "close-behavior", stop });
 	}
 
 	private post(message: object): void {
-		if (this.disposed) return;
-		if (!this.ready) {
-			// ponytail: cap pre-ready terminal output; add durable replay only if startup output can exceed this.
-			if (this.messageQueue.length < 256) this.messageQueue.push(message);
-			return;
-		}
-		void this.panel.webview.postMessage(message);
+		if (this.disposed || !this.viewReady || !this.view) return;
+		void this.view.webview.postMessage(message);
 	}
 
 	closeActiveSessionOrView(): void {
-		this.post({ type: "close-active-session-or-view" });
+		void vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar");
+	}
+
+	async copyTerminalSelection(): Promise<void> {
+		const session = this.activeSession();
+		await vscode.commands.executeCommand("workbench.action.terminal.copySelection");
+		if (!session) return;
+		const copied = await vscode.env.clipboard.readText();
+		const normalized = normalizePiTerminalCopy(copied, session.cols);
+		if (normalized !== copied) await vscode.env.clipboard.writeText(normalized);
+	}
+
+	private sessionForTerminal(terminal: vscode.Terminal): RunningSession | undefined {
+		return this.terminal === terminal ? this.presentedSession : undefined;
+	}
+
+	private activeSession(): RunningSession | undefined {
+		const terminal = vscode.window.activeTerminal;
+		return terminal ? this.sessionForTerminal(terminal) : undefined;
+	}
+
+	private postActiveSession(tabId: string | undefined): void {
+		this.post({ type: "active-session", ...(tabId ? { tabId } : {}) });
 	}
 }
 
@@ -1209,14 +1474,9 @@ function isClientMessage(value: unknown): value is ClientMessage {
 		message.type === "ready" ||
 		message.type === "refresh" ||
 		message.type === "new" ||
-		message.type === "close-view" ||
 		message.type === "customize"
 	) {
 		return true;
-	}
-	if (message.type === "input") return typeof message.id === "string" && typeof message.data === "string";
-	if (message.type === "resize") {
-		return typeof message.id === "string" && typeof message.cols === "number" && typeof message.rows === "number";
 	}
 	if (message.type === "archive") return typeof message.id === "string" && typeof message.archived === "boolean";
 	if (message.type === "load-user-messages") {
@@ -1234,15 +1494,8 @@ function isClientMessage(value: unknown): value is ClientMessage {
 			(message.action !== "rewind" || nonEmptyBoundedString(message.entryId, 512))
 		);
 	}
-	if (message.type === "detach" || message.type === "shutdown" || message.type === "delete" || message.type === "focus") {
+	if (message.type === "detach" || message.type === "shutdown" || message.type === "delete") {
 		return typeof message.id === "string";
-	}
-	if (message.type === "open-link") {
-		return (
-			(message.kind === "file" || message.kind === "url") &&
-			typeof message.target === "string" &&
-			message.target.length <= 8192
-		);
 	}
 	return message.type === "resume" && typeof message.id === "string";
 }
@@ -1264,42 +1517,15 @@ function webviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string 
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
-	<link rel="stylesheet" href="${uri("node_modules", "@xterm", "xterm", "css", "xterm.css")}">
 	<link rel="stylesheet" href="${uri("media", "main.css")}">
 	<title>Pi</title>
 </head>
 <body>
 	<div id="app">
-		<main id="terminal-pane" aria-label="Pi terminals">
-			<div id="tabbar">
-				<nav id="tabs" aria-label="Open Pi sessions"></nav>
-				<div id="tabbar-actions">
-					<button id="new-tab" class="icon-button" type="button" title="New session" aria-label="New session"></button>
-					<button id="tab-menu" class="icon-button" type="button" title="More actions" aria-label="More actions" aria-haspopup="menu"></button>
-					<button id="show-sidebar" class="icon-button" type="button" title="Show sessions" aria-label="Show sessions" hidden></button>
-				</div>
-			</div>
-			<div id="terminal-body">
-				<div id="terminal-hosts"></div>
-				<div id="find" hidden>
-					<input id="find-input" type="text" placeholder="Find" aria-label="Find in terminal" autocomplete="off" spellcheck="false">
-					<span id="find-count" aria-live="polite">No results</span>
-					<button id="find-prev" class="icon-button" type="button" title="Previous match (Shift+Enter)" aria-label="Previous match"></button>
-					<button id="find-next" class="icon-button" type="button" title="Next match (Enter)" aria-label="Next match"></button>
-					<button id="find-close" class="icon-button" type="button" title="Close (Escape)" aria-label="Close find"></button>
-				</div>
-				<div id="empty-state" hidden>
-					<p class="empty-title">No open session</p>
-					<p class="empty-hint">Start a new session, or pick one from the list.</p>
-					<button id="empty-new" class="primary-button" type="button">New session</button>
-				</div>
-			</div>
-		</main>
-		<aside id="sidebar" aria-label="Pi sessions">
+		<main id="sidebar" aria-label="Pi sessions">
 			<div id="sidebar-header">
 				<button id="customize" class="icon-button" type="button" title="Customize Pi settings" aria-label="Customize Pi settings"></button>
 				<button id="refresh" class="icon-button" type="button" title="Refresh sessions" aria-label="Refresh sessions"></button>
-				<button id="hide-sidebar" class="icon-button" type="button" title="Hide sessions" aria-label="Hide sessions"></button>
 			</div>
 			<div id="search-field">
 				<span class="search-icon" aria-hidden="true"></span>
@@ -1311,7 +1537,7 @@ function webviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string 
 				</button>
 			</nav>
 			<div id="session-list"></div>
-		</aside>
+		</main>
 	</div>
 	<div id="menu" role="menu" hidden></div>
 	<div id="message-dialog" class="dialog-scrim" hidden>
@@ -1327,15 +1553,6 @@ function webviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string 
 			</footer>
 		</section>
 	</div>
-	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "xterm", "lib", "xterm.js")}"></script>
-	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js")}"></script>
-	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-web-links", "lib", "addon-web-links.js")}"></script>
-	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-webgl", "lib", "addon-webgl.js")}"></script>
-	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-unicode11", "lib", "addon-unicode11.js")}"></script>
-	<script nonce="${nonce}" src="${uri("node_modules", "@xterm", "addon-search", "lib", "addon-search.js")}"></script>
-	<script nonce="${nonce}" src="${uri("media", "wrapped-path-links.js")}"></script>
-	<script nonce="${nonce}" src="${uri("media", "clipboard.js")}"></script>
-	<script nonce="${nonce}" src="${uri("media", "ime.js")}"></script>
 	<script nonce="${nonce}" src="${uri("media", "session-view.js")}"></script>
 	<script nonce="${nonce}" src="${uri("media", "main.js")}"></script>
 </body>
