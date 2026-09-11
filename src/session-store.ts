@@ -135,7 +135,8 @@ async function readSession(path: string, cwd: string): Promise<PiSession | undef
 
 async function parseSession(path: string): Promise<{ header: SessionHeader; id: string; cwd: string; title: string } | undefined> {
 	let header: SessionHeader | undefined;
-	let title = NEW_SESSION_TITLE;
+	let sessionInfoName: string | undefined;
+	let firstUserText: string | undefined;
 	const lines = createInterface({ input: createReadStream(path, { encoding: "utf8" }), crlfDelay: Infinity });
 	for await (const line of lines) {
 		const entry = parseLine(line);
@@ -145,10 +146,14 @@ async function parseSession(path: string): Promise<{ header: SessionHeader; id: 
 			header = entry;
 			continue;
 		}
-		if (entry.type === "session_info") title = sessionTitle(entry.name);
+		if (entry.type === "session_info") sessionInfoName = sessionTitle(entry.name) ?? sessionInfoName;
+		if (!firstUserText && entry.type === "message" && isUserMessage(entry.message)) {
+			const text = extractUserMessageText(entry.message.content);
+			if (text.trim()) firstUserText = text;
+		}
 	}
 	if (!header || typeof header.id !== "string" || typeof header.cwd !== "string") return undefined;
-	return { header, id: header.id, cwd: header.cwd, title };
+	return { header, id: header.id, cwd: header.cwd, title: sessionInfoName ?? (firstUserText ? deriveTitle(firstUserText) : NEW_SESSION_TITLE) };
 }
 
 function parseLine(line: string): Record<string, unknown> | undefined {
@@ -161,8 +166,28 @@ function parseLine(line: string): Record<string, unknown> | undefined {
 	}
 }
 
-function sessionTitle(name: unknown): string {
-	return typeof name === "string" && name.trim() ? name.trim() : NEW_SESSION_TITLE;
+function sessionTitle(name: unknown): string | undefined {
+	return typeof name === "string" && name.trim() ? name.trim() : undefined;
+}
+
+function isUserMessage(message: unknown): message is { role: unknown; content: unknown } {
+	return !!message && typeof message === "object" && (message as { role?: unknown }).role === "user";
+}
+
+function extractUserMessageText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((part): part is { type: "text"; text: string } =>
+			!!part && typeof part === "object" && (part as { type?: unknown }).type === "text" && typeof (part as { text?: unknown }).text === "string",
+		)
+		.map((part) => part.text)
+		.join("");
+}
+
+function deriveTitle(text: string): string {
+	const normalized = text.replace(/\s+/g, " ").trim();
+	return normalized.length > 60 ? `${normalized.slice(0, 60)}…` : normalized;
 }
 
 function sessionCreatedAt(header: SessionHeader, fallback: number): number {
