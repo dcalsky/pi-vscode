@@ -20,5 +20,6 @@ node_modules/node-addon-api/**
 .pi-subagents/**
 plugins/**
 test/**
+AGENTS.md
 **/.DS_Store
 .env
