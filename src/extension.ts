@@ -296,12 +296,16 @@ class PiSessionManager implements vscode.Disposable {
 			}),
 		);
 
-		void this.refreshHistory();
+		// Restored sessions take their terminal name from the history entry, so wait for the
+		// first read before restoring; otherwise every tab is created as NEW_SESSION_TITLE.
+		const historyReady = this.refreshHistory().catch(() => undefined);
 		void this.statusBridge
 			.start()
 			.catch((error) => vscode.window.showWarningMessage(`Pi session status unavailable: ${errorMessage(error)}`))
-			.finally(() => {
+			.finally(async () => {
 				this.statusBridgeReady = true;
+				if (this.disposed) return;
+				await historyReady;
 				if (this.disposed) return;
 				this.restoreSessions();
 				for (const pending of this.pendingStarts.splice(0)) {
