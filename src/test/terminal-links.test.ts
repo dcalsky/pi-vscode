@@ -1,14 +1,19 @@
 import assert from "node:assert/strict";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { httpUrl, resolveFileLink, terminalLineLinks } from "../terminal-links";
 
 test("resolves terminal file paths and source locations", () => {
-	assert.deepEqual(resolveFileLink("src/extension.ts:12:4", "/workspace", "/home/test"), {
-		path: "/workspace/src/extension.ts",
+	// Links resolve to native paths, so build the fixtures and expectations with the
+	// same path primitives rather than hard-coding POSIX separators.
+	const cwd = resolve("/workspace");
+	const home = resolve("/home/test");
+	assert.deepEqual(resolveFileLink("src/extension.ts:12:4", cwd, home), {
+		path: join(cwd, "src", "extension.ts"),
 		line: 11,
 		column: 3,
 	});
-	assert.deepEqual(resolveFileLink("~/notes.md", "/workspace", "/home/test"), { path: "/home/test/notes.md" });
+	assert.deepEqual(resolveFileLink("~/notes.md", cwd, home), { path: join(home, "notes.md") });
 });
 
 test("only accepts HTTP(S) URLs", () => {
