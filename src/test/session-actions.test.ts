@@ -108,6 +108,9 @@ test("detects and exactly restores worktree changes without changing the real in
 	await git(root, ["init"]);
 	await git(root, ["config", "user.name", "Pi VS Code Test"]);
 	await git(root, ["config", "user.email", "pi-vscode@example.com"]);
+	// Git for Windows installs core.autocrlf=true system-wide, which would rewrite
+	// these fixtures' line endings on checkout and defeat the byte-exact assertions.
+	await git(root, ["config", "core.autocrlf", "false"]);
 	await writeFile(join(root, "keep.txt"), "before\n");
 	await writeFile(join(root, "revive.txt"), "restore me\n");
 	await git(root, ["add", "-A"]);
