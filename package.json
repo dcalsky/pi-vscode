@@ -120,14 +120,14 @@
   "scripts": {
     "compile": "tsc -p .",
     "vscode:prepublish": "npm run compile",
-    "test": "npm run compile && node --test out/test/pi-command.test.js out/test/session-actions.test.js out/test/session-store.test.js out/test/session-view.test.js out/test/status-bridge.test.js out/test/terminal-links.test.js out/test/terminal-replay.test.js out/test/native-terminal-copy.test.js out/test/view-state.test.js",
+    "test": "npm run compile && node --test out/test/pi-command.test.js out/test/session-actions.test.js out/test/session-store.test.js out/test/session-view.test.js out/test/status-bridge.test.js out/test/terminal-links.test.js out/test/terminal-replay.test.js out/test/native-terminal-copy.test.js out/test/view-state.test.js out/test/node-pty-binary.test.js",
     "package": "npm version patch --no-git-tag-version --ignore-scripts && npx --yes @vscode/vsce package"
   },
   "dependencies": {
     "@xterm/addon-serialize": "0.15.0-beta.292",
     "@xterm/headless": "6.1.0-beta.292",
     "@xterm/xterm": "6.1.0-beta.292",
-    "node-pty": "1.1.0"
+    "node-pty": "1.2.0-beta.15"
   },
   "devDependencies": {
     "@types/node": "22.19.19",
