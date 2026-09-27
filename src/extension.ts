@@ -296,13 +296,18 @@ class PiSessionManager implements vscode.Disposable {
 			}),
 		);
 
-		void this.refreshHistory();
+		// Restore sessions only after the initial history read. Until both the status bridge
+		// and history are ready, keep starts queued so a user action cannot race restoreSessions
+		// and launch the same persisted session twice.
+		const historyReady = this.refreshHistory().catch(() => undefined);
 		void this.statusBridge
 			.start()
 			.catch((error) => vscode.window.showWarningMessage(`Pi session status unavailable: ${errorMessage(error)}`))
-			.finally(() => {
-				this.statusBridgeReady = true;
+			.finally(async () => {
 				if (this.disposed) return;
+				await historyReady;
+				if (this.disposed) return;
+				this.statusBridgeReady = true;
 				this.restoreSessions();
 				for (const pending of this.pendingStarts.splice(0)) {
 					this.startSession(pending.id, pending.sessionPath, pending.options);
