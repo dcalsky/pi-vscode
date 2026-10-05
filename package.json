@@ -85,6 +85,19 @@
           ],
           "default": "detach",
           "description": "What closing a Pi terminal does."
+        },
+        "piAgent.tuiMode": {
+          "type": "string",
+          "enum": [
+            "regular",
+            "inherit"
+          ],
+          "enumDescriptions": [
+            "Start Pi with `--tui-mode regular` so the VS Code terminal keeps its scrollback, mouse-wheel scrolling and native text selection/copy.",
+            "Use Pi's own `tuiMode` setting (fullscreen by default since Pi 1.0), where Pi owns the alternate screen, scrolling and selection."
+          ],
+          "default": "regular",
+          "markdownDescription": "Terminal UI mode for Pi sessions started by VS Code. Applies to newly started sessions."
         }
       }
     },

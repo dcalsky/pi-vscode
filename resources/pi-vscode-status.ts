@@ -234,6 +234,10 @@ async function hasConfiguredRewindHook(): Promise<boolean> {
 }
 
 export default function (pi: any): void {
+	// VS Code passes `--tui-mode regular` so Pi 1.0+ keeps native terminal scrollback.
+	// Pi parses that flag itself; registering it here only lets older releases, which
+	// would otherwise reject an unknown option, accept and ignore it.
+	pi.registerFlag?.("tui-mode", { type: "string", description: "Interactive terminal UI mode (set by Pi for VS Code)" });
 	pi.on("session_start", async (_event: any, ctx: any) => {
 		if (ctx?.hasUI !== true || !enabled()) return;
 		rootSession = true;

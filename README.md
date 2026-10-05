@@ -62,6 +62,7 @@ Pi opens its session list in the Secondary Side Bar, restores the native termina
 | --- | --- | --- |
 | `piAgent.command` | `pi` | Executable name or absolute path used to start pi. Leave it as `pi` to auto-detect, including npm's `pi.cmd` shim on Windows; set an absolute path when detection cannot find it. It is an executable path, not a command line with arguments. |
 | `piAgent.closeBehavior` | `detach` | Keep Pi running and reconstruct its terminal when reopened, or set `stop` to end Pi when its terminal closes. |
+| `piAgent.tuiMode` | `regular` | Start Pi with `--tui-mode regular` so the terminal keeps its scrollback, wheel scrolling and native selection/copy. Set `inherit` to use Pi's own `tuiMode` setting instead (fullscreen by default since Pi 1.0, where Pi owns scrolling and selection). |
 
 If pi cannot be found (for example on Windows, where npm installs a `pi.cmd` shim that VS Code must launch through `cmd.exe`), the extension looks it up in `PATH` and in npm's global directory, then asks you to browse for or type the executable path. The choice is saved to `piAgent.command`.
 
