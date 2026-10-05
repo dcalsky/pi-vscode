@@ -31,7 +31,7 @@ import {
 	type PiSessionState,
 	type PiStatusReport,
 } from "./status-bridge";
-import { win32Spawn } from "./pi-command";
+import { piTuiModeArgs, win32Spawn } from "./pi-command";
 import { PiPseudoterminal } from "./native-terminal";
 import { httpUrl, resolveFileLink } from "./terminal-links";
 import { TerminalReplay } from "./terminal-replay";
@@ -876,6 +876,12 @@ class PiSessionManager implements vscode.Disposable {
 			const args = sessionPath ? ["--session", sessionPath] : ["--session-id", id];
 			if (options.model) args.push("--model", options.model);
 			if (this.statusBridge.isListening) args.push("--extension", piStatusExtensionPath(this.extensionUri));
+			args.push(
+				...piTuiModeArgs(
+					vscode.workspace.getConfiguration("piAgent").get<string>("tuiMode"),
+					this.statusBridge.isListening,
+				),
+			);
 			const draftEnvironment = options.nativeDraftFile
 				? { [PI_NATIVE_DRAFT_FILE_ENV]: options.nativeDraftFile }
 				: options.draftFile

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cmdCommandLine, cmdQuote, win32Spawn } from "../pi-command";
+import { cmdCommandLine, cmdQuote, piTuiModeArgs, win32Spawn } from "../pi-command";
 
 test("cmdQuote leaves plain args untouched", () => {
 	assert.equal(cmdQuote("pi"), "pi");
@@ -36,4 +36,14 @@ test("win32Spawn spawns real .exe paths directly", () => {
 	const { file, args } = win32Spawn("C:\\tools\\pi.exe", ["--session-id", "abc"]);
 	assert.equal(file, "C:\\tools\\pi.exe");
 	assert.deepEqual(args, ["--session-id", "abc"]);
+});
+
+test("piTuiModeArgs forces regular mode unless the user inherits Pi's setting", () => {
+	assert.deepEqual(piTuiModeArgs(undefined, true), ["--tui-mode", "regular"]);
+	assert.deepEqual(piTuiModeArgs("regular", true), ["--tui-mode", "regular"]);
+	assert.deepEqual(piTuiModeArgs("inherit", true), []);
+});
+
+test("piTuiModeArgs omits the flag when older Pi could not accept it", () => {
+	assert.deepEqual(piTuiModeArgs("regular", false), []);
 });
