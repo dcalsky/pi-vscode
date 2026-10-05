@@ -1,0 +1,86 @@
+name: Bug report
+description: Something in Pi for VS Code does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Pi's own settings change how its terminal UI behaves (for example, Pi 1.0 made fullscreen mode the default), so please fill in every field below.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. Screenshots or recordings help.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the Pi side bar and start a new session
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - WSL
+        - Remote (SSH / Dev Container / Codespaces)
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      placeholder: e.g. Windows 11 24H2, macOS 15.5, Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: pi-version
+    attributes:
+      label: Pi version
+      description: Output of `pi --version`
+      placeholder: e.g. 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: extension-version
+    attributes:
+      label: Pi for VS Code extension version
+      description: Shown on the extension's page in the Extensions view
+      placeholder: e.g. 0.0.57
+    validations:
+      required: true
+  - type: input
+    id: vscode-version
+    attributes:
+      label: VS Code version
+      description: Help → About (or `code --version`)
+      placeholder: e.g. 1.105.0
+    validations:
+      required: true
+  - type: textarea
+    id: pi-settings
+    attributes:
+      label: Pi settings
+      description: |
+        Run this from your project folder (works in bash, zsh, PowerShell and cmd). It prints your global `~/.pi/agent/settings.json` and the project's `.pi/settings.json`, replacing values whose names look like keys, tokens, passwords, auth, proxies, headers or credentials with `<redacted>`. Review the output before pasting.
+
+        ```
+        node -e "const fs=require('fs'),os=require('os'),path=require('path');const dir=process.env.PI_CODING_AGENT_DIR||path.join(os.homedir(),'.pi','agent');const hide=/api.?key|token|secret|passw|auth|proxy|header|cookie|credential/i;for(const file of [path.join(dir,'settings.json'),path.join('.pi','settings.json')]){let text;try{text=fs.readFileSync(file,'utf8')}catch{console.log('// '+file+': not found');continue}try{console.log('// '+file+'\n'+JSON.stringify(JSON.parse(text),(k,v)=>k&&hide.test(k)?'<redacted>':v,2))}catch{console.log('// '+file+': invalid JSON')}}"
+        ```
+      render: jsonc
+    validations:
+      required: true
+  - type: textarea
+    id: vscode-settings
+    attributes:
+      label: Pi for VS Code settings (optional)
+      description: Any `piAgent.*` settings you changed in VS Code.
+      render: jsonc
