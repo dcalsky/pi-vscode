@@ -41,6 +41,9 @@ export interface PiPanelRequest {
 	timeoutMs?: number;
 }
 
+/** Commands VS Code pushes down a Pi process's control connection. */
+export type PiControlCommand = { type: "rename"; sessionId: string; name: string };
+
 interface WireStatusReport extends PiStatusReport {
 	type: "pi-vscode-status";
 	token: string;
@@ -56,6 +59,12 @@ interface WirePanelRequest extends PiPanelRequest {
 	token: string;
 }
 
+interface WireControlSubscribe {
+	type: "pi-vscode-control";
+	token: string;
+	tabId: string;
+}
+
 const MAX_MESSAGE_BYTES = 1024 * 1024;
 const REPORTED_STATES = new Set<ReportedState>(["working", "idle"]);
 
@@ -67,6 +76,8 @@ export class PiStatusBridge {
 	private readonly endpoint = socketEndpoint();
 	private readonly token = randomUUID();
 	private readonly sockets = new Set<Socket>();
+	/** One long-lived connection per Pi process, keyed by tab, for VS Code-to-Pi commands. */
+	private readonly controls = new Map<string, Socket>();
 	private server: Server | undefined;
 	private listening = false;
 	private disposed = false;
@@ -88,6 +99,14 @@ export class PiStatusBridge {
 			PI_VSCODE_STATUS_TOKEN: this.token,
 			PI_VSCODE_STATUS_TAB_ID: tabId,
 		};
+	}
+
+	/** Returns false when the tab's Pi process has no open control connection. */
+	sendControl(tabId: string, command: PiControlCommand): boolean {
+		const socket = this.controls.get(tabId);
+		if (!socket || socket.destroyed || !socket.writable) return false;
+		socket.write(`${JSON.stringify(command)}\n`);
+		return true;
 	}
 
 	async start(): Promise<void> {
@@ -127,6 +146,7 @@ export class PiStatusBridge {
 		this.listening = false;
 		for (const socket of this.sockets) socket.destroy();
 		this.sockets.clear();
+		this.controls.clear();
 
 		const server = this.server;
 		this.server = undefined;
@@ -176,6 +196,16 @@ export class PiStatusBridge {
 					seq: message.seq,
 				});
 				socket.end();
+				return;
+			}
+
+			if (isWireControlSubscribe(message) && message.token === this.token) {
+				// A Pi process holds one control connection; a newer one replaces it.
+				this.controls.get(message.tabId)?.destroy();
+				this.controls.set(message.tabId, socket);
+				socket.once("close", () => {
+					if (this.controls.get(message.tabId) === socket) this.controls.delete(message.tabId);
+				});
 				return;
 			}
 
@@ -288,6 +318,12 @@ function isWireForkRequest(value: unknown): value is WireForkRequest {
 		nonEmptyString(request.sessionPath) &&
 		nonEmptyString(request.draftFile)
 	);
+}
+
+function isWireControlSubscribe(value: unknown): value is WireControlSubscribe {
+	if (!value || typeof value !== "object") return false;
+	const message = value as Record<string, unknown>;
+	return message.type === "pi-vscode-control" && nonEmptyString(message.token) && nonEmptyString(message.tabId);
 }
 
 const PANEL_ACTIONS = new Set<PiPanelAction>(["create", "prompt", "wait", "list"]);

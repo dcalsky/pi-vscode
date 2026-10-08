@@ -7,6 +7,7 @@ import * as pty from "node-pty";
 import * as vscode from "vscode";
 import {
 	createForkedSession,
+	appendSessionName,
 	createNativeDraftFile,
 	listSessionUserMessages,
 	prepareRewindSession,
@@ -14,6 +15,7 @@ import {
 	resolveSessionSnapshot,
 	restoreWorktreeSnapshot,
 	rewriteSessionFile,
+	sanitizeSessionName,
 	worktreeDiffersFromSnapshot,
 } from "./session-actions";
 import {
@@ -93,6 +95,7 @@ type ClientMessage =
 	| { type: "shutdown"; id: string }
 	| { type: "delete"; id: string }
 	| { type: "archive"; id: string; archived: boolean }
+	| { type: "rename"; id: string }
 	| { type: "load-user-messages"; action: SessionHistoryAction; id: string; requestId: string }
 	| { type: "session-history-action"; action: SessionHistoryAction; id: string; entryId?: string };
 
@@ -222,6 +225,8 @@ class PiSessionManager implements vscode.Disposable {
 	private readonly viewDisposables: vscode.Disposable[] = [];
 	private readonly sessions = new Map<string, RunningSession>();
 	private readonly history = new Map<string, PiSession>();
+	/** Names given to running sessions Pi has not written to disk yet. */
+	private readonly renamedTitles = new Map<string, string>();
 	private readonly sessionStates = new Map<string, PiSessionState>();
 	private readonly statusSequences = new Map<string, { sourceId: string; seq: number }>();
 	private readonly historyWatchers = new Map<string, FSWatcher>();
@@ -383,6 +388,9 @@ class PiSessionManager implements vscode.Disposable {
 			case "archive":
 				this.archiveSession(message.id, message.archived);
 				break;
+			case "rename":
+				await this.renameSession(message.id);
+				break;
 			case "load-user-messages":
 				await this.loadUserMessages(message.action, message.id, message.requestId);
 				break;
@@ -507,6 +515,7 @@ class PiSessionManager implements vscode.Disposable {
 		}
 		if (this.disposed) return;
 		this.history.delete(sessionId);
+		this.renamedTitles.delete(sessionId);
 		this.sessionStates.delete(sessionId);
 		// The archive list is the only view state keyed by session id; the rest is rebuilt from live tabs.
 		this.viewState = setArchived(this.viewState, sessionId, false);
@@ -522,6 +531,45 @@ class PiSessionManager implements vscode.Disposable {
 		}
 		this.viewState = setArchived(this.viewState, sessionId, archived);
 		this.persistViewState();
+		this.postHistory();
+	}
+
+	/** A running session renames itself through Pi (so its in-memory state agrees); a saved one is renamed on disk. */
+	private async renameSession(sessionId: string): Promise<void> {
+		const current = this.titleForSession(sessionId, this.openSessionFor(sessionId)?.title);
+		const input = await vscode.window.showInputBox({
+			title: "Rename Session",
+			value: current,
+			valueSelection: [0, current.length],
+			prompt: "Session name shown in the Pi session list",
+			validateInput: (value) => (sanitizeSessionName(value) ? undefined : "Enter a name."),
+		});
+		if (input === undefined || this.disposed) return;
+		const name = sanitizeSessionName(input);
+		if (!name || name === current) return;
+
+		const open = this.openSessionFor(sessionId);
+		try {
+			if (open) {
+				if (this.sessionStates.get(sessionId) === "starting") throw new Error("Wait for Pi to finish starting.");
+				if (!this.statusBridge.sendControl(open.tabId, { type: "rename", sessionId, name })) {
+					throw new Error("This Pi process cannot be renamed from VS Code; use /name in its terminal.");
+				}
+			} else {
+				const path = this.history.get(sessionId)?.path;
+				if (!path) throw new Error("Session not found.");
+				await appendSessionName(path, name);
+			}
+		} catch (error) {
+			void vscode.window.showErrorMessage(`Could not rename "${current}": ${errorMessage(error)}`);
+			return;
+		}
+		if (this.disposed) return;
+		// Show the name now; the history watcher picks up what Pi writes to disk.
+		const saved = this.history.get(sessionId);
+		if (saved) this.history.set(sessionId, { ...saved, title: name });
+		else this.renamedTitles.set(sessionId, name);
+		this.syncSessionTitles();
 		this.postHistory();
 	}
 
@@ -1260,8 +1308,8 @@ class PiSessionManager implements vscode.Disposable {
 		return [...this.sessions.values()].find((session) => session.sessionId === sessionId);
 	}
 
-	private titleForSession(sessionId: string): string {
-		return this.history.get(sessionId)?.title ?? NEW_SESSION_TITLE;
+	private titleForSession(sessionId: string, fallback = NEW_SESSION_TITLE): string {
+		return this.history.get(sessionId)?.title ?? this.renamedTitles.get(sessionId) ?? fallback;
 	}
 
 	private syncSessionTitles(): void {
@@ -1505,6 +1553,7 @@ function isClientMessage(value: unknown): value is ClientMessage {
 			(message.action !== "rewind" || nonEmptyBoundedString(message.entryId, 512))
 		);
 	}
+	if (message.type === "rename") return nonEmptyBoundedString(message.id, 512);
 	if (message.type === "detach" || message.type === "shutdown" || message.type === "delete") {
 		return typeof message.id === "string";
 	}

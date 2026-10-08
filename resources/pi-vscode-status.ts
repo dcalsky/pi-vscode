@@ -28,6 +28,7 @@ let lastState: "working" | "idle" | undefined;
 let repoRoot: string | undefined;
 let checkpointWarningShown = false;
 let nativeCheckpointsEnabled = true;
+let controlSocket: net.Socket | undefined;
 
 function enabled(): boolean {
 	return Boolean(socketPath && token && tabId);
@@ -87,6 +88,47 @@ function publish(state: "working" | "idle", force = false): void {
 		timeout.unref?.();
 	} catch {
 		finish();
+	}
+}
+
+// Long-lived connection VS Code uses to push commands (e.g. rename) to this process.
+function connectControl(pi: any): void {
+	if (!enabled() || controlSocket) return;
+	let pending = "";
+	try {
+		const socket = net.createConnection(socketPath!);
+		controlSocket = socket;
+		socket.setEncoding("utf8");
+		socket.unref?.();
+		socket.once("connect", () => socket.write(`${JSON.stringify({ type: "pi-vscode-control", token, tabId })}\n`));
+		socket.on("data", (chunk: string) => {
+			pending += chunk;
+			let newline: number;
+			while ((newline = pending.indexOf("\n")) >= 0) {
+				const line = pending.slice(0, newline);
+				pending = pending.slice(newline + 1);
+				handleControl(pi, line);
+			}
+		});
+		socket.on("error", () => undefined);
+		socket.once("close", () => {
+			if (controlSocket === socket) controlSocket = undefined;
+		});
+	} catch {
+		controlSocket = undefined;
+	}
+}
+
+function handleControl(pi: any, line: string): void {
+	try {
+		const command = JSON.parse(line);
+		if (command?.type !== "rename" || typeof command.name !== "string") return;
+		// The tab may have switched sessions (/new, /resume) since VS Code sent this.
+		if (command.sessionId !== currentSessionId) return;
+		const name = command.name.replace(/[\r\n]+/g, " ").trim();
+		if (name) pi.setSessionName?.(name);
+	} catch {
+		// Ignore malformed control messages.
 	}
 }
 
@@ -243,6 +285,7 @@ export default function (pi: any): void {
 		rootSession = true;
 		await consumeNativeDraft(ctx);
 		updateSessionRef(ctx);
+		connectControl(pi);
 		try {
 			const result = await pi.exec("git", ["rev-parse", "--show-toplevel"]);
 			repoRoot = result?.code === 0 && result.stdout?.trim() ? result.stdout.trim() : undefined;
