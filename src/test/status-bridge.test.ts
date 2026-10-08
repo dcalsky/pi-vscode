@@ -53,6 +53,41 @@ test("relays only token-authenticated Pi status reports", async () => {
 	await bridge.dispose();
 });
 
+test("pushes control commands only to token-authenticated subscribers", async () => {
+	const bridge = new PiStatusBridge(() => undefined);
+	await bridge.start();
+	const environment = bridge.environmentFor("tab-1");
+	assert.equal(bridge.sendControl("tab-1", { type: "rename", sessionId: "session-1", name: "x" }), false);
+
+	const rejected = createConnection(environment.PI_VSCODE_STATUS_SOCKET!);
+	await new Promise((resolve) => rejected.once("connect", resolve));
+	rejected.write(`${JSON.stringify({ type: "pi-vscode-control", token: "wrong", tabId: "tab-1" })}\n`);
+	await new Promise((resolve) => rejected.once("close", resolve));
+	assert.equal(bridge.sendControl("tab-1", { type: "rename", sessionId: "session-1", name: "x" }), false);
+
+	const socket = createConnection(environment.PI_VSCODE_STATUS_SOCKET!);
+	socket.setEncoding("utf8");
+	const line = new Promise<string>((resolve) => {
+		let buffered = "";
+		socket.on("data", (chunk: string) => {
+			buffered += chunk;
+			if (buffered.includes("\n")) resolve(buffered.slice(0, buffered.indexOf("\n")));
+		});
+	});
+	await new Promise((resolve) => socket.once("connect", resolve));
+	socket.write(`${JSON.stringify({ type: "pi-vscode-control", token: environment.PI_VSCODE_STATUS_TOKEN, tabId: "tab-1" })}\n`);
+	const command = { type: "rename" as const, sessionId: "session-1", name: "Renamed" };
+	for (let attempt = 0; attempt < 50 && !bridge.sendControl("tab-1", command); attempt++) {
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	assert.deepEqual(JSON.parse(await line), command);
+
+	socket.destroy();
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	assert.equal(bridge.sendControl("tab-1", command), false);
+	await bridge.dispose();
+});
+
 test("detects only working-to-idle transitions", () => {
 	assert.equal(becameIdle("working", "idle"), true);
 	assert.equal(becameIdle("starting", "idle"), false);

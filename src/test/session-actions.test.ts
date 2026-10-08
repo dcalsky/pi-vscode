@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import {
+	appendSessionName,
 	createForkedSession,
 	listSessionUserMessages,
 	prepareRewindSession,
@@ -24,6 +25,19 @@ test("lists user messages from the current branch", async (t) => {
 		{ id: "user-1", text: "First prompt" },
 		{ id: "abandoned-user", text: "Abandoned prompt" },
 	]);
+});
+
+test("renames a saved session the way Pi's /name does", async (t) => {
+	const fixture = await sessionFixture(t);
+	await appendSessionName(fixture.path, "  Renamed\nsession  ");
+
+	const records = await readRecords(fixture.path);
+	const entry = records.at(-1);
+	assert.equal(entry?.type, "session_info");
+	assert.equal(entry?.name, "Renamed session");
+	assert.equal(entry?.parentId, "title");
+	assert.match(String(entry?.id), /^[0-9a-f]{8}$/);
+	await assert.rejects(appendSessionName(fixture.path, " \n "), /cannot be empty/);
 });
 
 test("forks before the selected message and leaves that message as a draft", async (t) => {

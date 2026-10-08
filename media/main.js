@@ -358,6 +358,11 @@
 					run: () => vscode.postMessage({ type: "shutdown", id: session.tabId }),
 				});
 			}
+			items.push({
+				label: "Rename",
+				hint: "Change the name shown in this list",
+				run: () => vscode.postMessage({ type: "rename", id: session.id }),
+			});
 			items.push(...sessionHistoryActionItems(session));
 			items.push({
 				label: archived ? "Restore" : "Archive",

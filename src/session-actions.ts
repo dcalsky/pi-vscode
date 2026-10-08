@@ -116,6 +116,20 @@ export async function rewriteSessionFile(path: string, contents: string): Promis
 	}
 }
 
+/** Pi's own `/name` rule: one line, trimmed. */
+export function sanitizeSessionName(name: string): string {
+	return name.replace(/[\r\n]+/g, " ").trim();
+}
+
+/** Renames a session no Pi process holds open by appending the `session_info` entry Pi's `/name` writes. */
+export async function appendSessionName(path: string, name: string): Promise<void> {
+	const title = sanitizeSessionName(name);
+	if (!title) throw new Error("Session name cannot be empty.");
+	const document = await readSessionDocument(path);
+	const entry = sessionInfo(title, lastEntryId(document.entries), document.entries);
+	await fs.appendFile(path, `${JSON.stringify(entry)}\n`, "utf8");
+}
+
 export async function createNativeDraftFile(text: string): Promise<string> {
 	const directory = await fs.mkdtemp(join(tmpdir(), NATIVE_DRAFT_DIRECTORY_PREFIX));
 	const path = join(directory, NATIVE_DRAFT_FILE_NAME);
