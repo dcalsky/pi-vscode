@@ -56,6 +56,8 @@ Panels share the workspace filesystem, so agents exchange briefs and results thr
 
 Pi opens its session list in the Secondary Side Bar, restores the native terminals that were open for that folder, and offers **New session** to start one.
 
+Select terminal text and press **Ctrl+Shift+C** (Linux/Windows) or **Cmd+C** (macOS) to copy. If the shortcut is forwarded to Pi, check that `terminal.integrated.sendKeybindingsToShell` is `false`. If you have customized `terminal.integrated.commandsToSkipShell`, add `"piAgent.copyTerminalSelection"` to your existing list so VS Code handles the copy shortcut.
+
 ## Configuration
 
 | Setting | Default | Description |

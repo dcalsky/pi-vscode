@@ -65,6 +65,11 @@
         "when": "terminalFocus && terminalTextSelectedInFocused"
       }
     ],
+    "configurationDefaults": {
+      "terminal.integrated.commandsToSkipShell": [
+        "piAgent.copyTerminalSelection"
+      ]
+    },
     "configuration": {
       "title": "Pi",
       "properties": {
