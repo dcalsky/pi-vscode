@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cmdCommandLine, cmdQuote, piTuiModeArgs, win32Spawn } from "../pi-command";
+import { cmdCommandLine, cmdQuote, piCommandArgs, piTuiModeArgs, win32Spawn } from "../pi-command";
 
 test("cmdQuote leaves plain args untouched", () => {
 	assert.equal(cmdQuote("pi"), "pi");
@@ -46,4 +46,14 @@ test("piTuiModeArgs forces regular mode unless the user inherits Pi's setting", 
 
 test("piTuiModeArgs omits the flag when older Pi could not accept it", () => {
 	assert.deepEqual(piTuiModeArgs("regular", false), []);
+});
+
+test("piCommandArgs keeps configured string arguments in order", () => {
+	assert.deepEqual(piCommandArgs(["run", "--allow", "/tmp", "--", "pi"]), ["run", "--allow", "/tmp", "--", "pi"]);
+});
+
+test("piCommandArgs ignores malformed settings", () => {
+	assert.deepEqual(piCommandArgs(undefined), []);
+	assert.deepEqual(piCommandArgs("--offline"), []);
+	assert.deepEqual(piCommandArgs(["--offline", 3, "", null]), ["--offline"]);
 });

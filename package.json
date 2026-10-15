@@ -78,6 +78,14 @@
           "default": "pi",
           "description": "Executable or absolute path used to start pi. Leave as pi to auto-detect (including npm's pi.cmd on Windows); set an absolute path when detection cannot find it."
         },
+        "piAgent.commandArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra arguments passed to `#piAgent.command#`, before the arguments the extension adds (such as `--session-id`). Use this for pi flags, or to launch pi through a wrapper such as a sandbox: set `#piAgent.command#` to the wrapper and list its arguments here, ending with `pi` (for example `[\"run\", \"--\", \"pi\"]`)."
+        },
         "piAgent.closeBehavior": {
           "type": "string",
           "enum": [

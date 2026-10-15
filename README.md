@@ -62,7 +62,8 @@ Select terminal text and press **Ctrl+Shift+C** (Linux/Windows) or **Cmd+C** (ma
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `piAgent.command` | `pi` | Executable name or absolute path used to start pi. Leave it as `pi` to auto-detect, including npm's `pi.cmd` shim on Windows; set an absolute path when detection cannot find it. It is an executable path, not a command line with arguments. |
+| `piAgent.command` | `pi` | Executable name or absolute path used to start pi. Leave it as `pi` to auto-detect, including npm's `pi.cmd` shim on Windows; set an absolute path when detection cannot find it. It is an executable path, not a command line; put arguments in `piAgent.commandArgs`. |
+| `piAgent.commandArgs` | `[]` | Extra arguments passed to `piAgent.command`, before the ones the extension adds (`--session-id`, `--extension`, ...). Use it for pi flags, or to run pi through a wrapper such as a sandbox (see below). |
 | `piAgent.closeBehavior` | `detach` | Keep Pi running and reconstruct its terminal when reopened, or set `stop` to end Pi when its terminal closes. |
 | `piAgent.tuiMode` | `regular` | Start Pi with `--tui-mode regular` so the terminal keeps its scrollback, wheel scrolling and native selection/copy. Set `inherit` to use Pi's own `tuiMode` setting instead (fullscreen by default since Pi 1.0, where Pi owns scrolling and selection). |
 
@@ -71,6 +72,15 @@ If pi cannot be found (for example on Windows, where npm installs a `pi.cmd` shi
 ```json
 {
   "piAgent.command": "/absolute/path/to/pi"
+}
+```
+
+To launch pi through a wrapper, such as a sandbox like [nono](https://github.com/nolabs-ai/nono), point `piAgent.command` at the wrapper and end `piAgent.commandArgs` with `pi`; the extension appends its own pi arguments after them:
+
+```json
+{
+  "piAgent.command": "nono",
+  "piAgent.commandArgs": ["run", "--", "pi"]
 }
 ```
 
