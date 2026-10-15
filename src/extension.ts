@@ -33,7 +33,7 @@ import {
 	type PiSessionState,
 	type PiStatusReport,
 } from "./status-bridge";
-import { piTuiModeArgs, win32Spawn } from "./pi-command";
+import { piCommandArgs, piTuiModeArgs, win32Spawn } from "./pi-command";
 import { PiPseudoterminal } from "./native-terminal";
 import { httpUrl, resolveFileLink } from "./terminal-links";
 import { TerminalReplay } from "./terminal-replay";
@@ -921,7 +921,8 @@ class PiSessionManager implements vscode.Disposable {
 			const tabId = id;
 			const cols = 80;
 			const rows = 24;
-			const args = sessionPath ? ["--session", sessionPath] : ["--session-id", id];
+			const args = piCommandArgs(vscode.workspace.getConfiguration("piAgent").get<unknown>("commandArgs"));
+			args.push(...(sessionPath ? ["--session", sessionPath] : ["--session-id", id]));
 			if (options.model) args.push("--model", options.model);
 			if (this.statusBridge.isListening) args.push("--extension", piStatusExtensionPath(this.extensionUri));
 			args.push(

@@ -36,3 +36,13 @@ export function win32Spawn(file: string, args: string[]): { file: string; args: 
 export function piTuiModeArgs(mode: string | undefined, statusExtensionLoaded: boolean): string[] {
 	return mode !== "inherit" && statusExtensionLoaded ? ["--tui-mode", "regular"] : [];
 }
+
+/**
+ * User-configured arguments placed before the extension's own Pi arguments, so
+ * piAgent.command can be Pi itself (`--offline`) or a wrapper that launches Pi
+ * (`nono run ... -- pi`). Non-string or empty entries are dropped.
+ */
+export function piCommandArgs(configured: unknown): string[] {
+	if (!Array.isArray(configured)) return [];
+	return configured.filter((arg): arg is string => typeof arg === "string" && arg.length > 0);
+}
