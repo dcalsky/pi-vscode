@@ -58,6 +58,8 @@ Pi opens its session list in the Secondary Side Bar, restores the native termina
 
 Select terminal text and press **Ctrl+Shift+C** (Linux/Windows) or **Cmd+C** (macOS) to copy. If the shortcut is forwarded to Pi, check that `terminal.integrated.sendKeybindingsToShell` is `false`. If you have customized `terminal.integrated.commandsToSkipShell`, add `"piAgent.copyTerminalSelection"` to your existing list so VS Code handles the copy shortcut.
 
+To edit a multi-line prompt with the mouse, set `"piAgent.tuiMode": "inherit"` in VS Code settings and choose **New session** in the Pi sidebar. Pi uses fullscreen by default since 1.0. If you've set Pi's own `tuiMode` to `regular`, change it to `fullscreen` before starting the session. In fullscreen mode, left-click the text to place the cursor and type there. Pi also handles scrolling and text selection in this mode.
+
 ## Configuration
 
 | Setting | Default | Description |
@@ -65,7 +67,7 @@ Select terminal text and press **Ctrl+Shift+C** (Linux/Windows) or **Cmd+C** (ma
 | `piAgent.command` | `pi` | Executable name or absolute path used to start pi. Leave it as `pi` to auto-detect, including npm's `pi.cmd` shim on Windows; set an absolute path when detection cannot find it. It is an executable path, not a command line; put arguments in `piAgent.commandArgs`. |
 | `piAgent.commandArgs` | `[]` | Extra arguments passed to `piAgent.command`, before the ones the extension adds (`--session-id`, `--extension`, ...). Use it for pi flags, or to run pi through a wrapper such as a sandbox (see below). |
 | `piAgent.closeBehavior` | `detach` | Keep Pi running and reconstruct its terminal when reopened, or set `stop` to end Pi when its terminal closes. |
-| `piAgent.tuiMode` | `regular` | Start Pi with `--tui-mode regular` so the terminal keeps its scrollback, wheel scrolling and native selection/copy. Set `inherit` to use Pi's own `tuiMode` setting instead (fullscreen by default since Pi 1.0, where Pi owns scrolling and selection). |
+| `piAgent.tuiMode` | `regular` | Use `regular` for VS Code's native scrollback, scrolling and selection. Use `inherit` to follow Pi's own mode, including fullscreen for click-to-edit prompts. Applies to new sessions. |
 
 If pi cannot be found (for example on Windows, where npm installs a `pi.cmd` shim that VS Code must launch through `cmd.exe`), the extension looks it up in `PATH` and in npm's global directory, then asks you to browse for or type the executable path. The choice is saved to `piAgent.command`.
 
