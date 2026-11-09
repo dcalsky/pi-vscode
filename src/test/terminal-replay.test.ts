@@ -41,6 +41,42 @@ test("replays Kitty keyboard mode that addon-serialize does not preserve", async
 	replay.dispose();
 });
 
+test("restores mouse tracking and encoding on a fresh or reset terminal", async (t) => {
+	const replay = new TerminalReplay();
+	const restored = new Terminal({ allowProposedApi: true });
+	t.after(() => {
+		restored.dispose();
+		replay.dispose();
+	});
+	const reports: string[] = [];
+	restored.onData((data) => reports.push(data));
+
+	async function check(encoding: "default" | "cells" | "pixels", tracking: "none" | "any") {
+		await write(restored, (await replay.snapshot()).data);
+		reports.length = 0;
+		// Ask the restored terminal which encoding it will use for actual mouse input.
+		await write(restored, "\x1b[?1006$p\x1b[?1016$p");
+		assert.deepEqual(reports, [
+			`\x1b[?1006;${encoding === "cells" ? 1 : 2}$y`,
+			`\x1b[?1016;${encoding === "pixels" ? 1 : 2}$y`,
+		]);
+		assert.equal(restored.modes.mouseTrackingMode, tracking);
+		await write(restored, "\x1bc"); // shared terminal resets when switching sessions
+	}
+
+	replay.write("\x1b[?1049h\x1b[?1003;10");
+	replay.write("06h");
+	await check("cells", "any");
+	replay.write("\x1b[?1016h");
+	await check("pixels", "any");
+	replay.write("\x1b[?1016l");
+	await check("default", "any");
+	replay.write("\x1b[?1006h\x1bc");
+	await check("default", "none");
+	replay.write("\x1b[?1006h\x1b[?1006l");
+	await check("default", "none");
+});
+
 test("maps every hard-wrapped path fragment back to the complete native terminal link", async () => {
 	const replay = new TerminalReplay(24, 5, 10);
 	const target = "/workspace/docs/architecture/native-terminal.md";

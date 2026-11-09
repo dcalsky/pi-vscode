@@ -22,6 +22,7 @@ export class TerminalReplay {
 	private sequence = 0;
 	private controlTail = "";
 	private kittyKeyboardSequence = "";
+	private mouseEncodingSequence = "";
 	private disposed = false;
 
 	constructor(
@@ -39,6 +40,22 @@ export class TerminalReplay {
 		// The headless and browser Terminal APIs implement the same addon contract;
 		// addon-serialize currently publishes its declaration against @xterm/xterm.
 		this.terminal.loadAddon(this.serializer as never);
+		// addon-serialize saves mouse tracking but omits the encoding for clicks and
+		// wheel events. Observe xterm's parsed mode changes, including split PTY writes.
+		for (const final of ["h", "l"]) {
+			this.terminal.parser.registerCsiHandler({ prefix: "?", final }, (params) => {
+				for (const mode of params) {
+					if (mode === 1006 || mode === 1016) {
+						this.mouseEncodingSequence = final === "h" ? `\x1b[?${mode}h` : "";
+					}
+				}
+				return false; // Let xterm apply these modes as usual.
+			});
+		}
+		this.terminal.parser.registerEscHandler({ final: "c" }, () => {
+			this.mouseEncodingSequence = "";
+			return false;
+		});
 	}
 
 	write(data: string): number {
@@ -72,7 +89,8 @@ export class TerminalReplay {
 			await writeChain;
 			if (this.disposed) return { data: "", sequence: this.sequence };
 			if (sequence !== this.sequence || writeChain !== this.writeChain) continue;
-			return { data: this.kittyKeyboardSequence + this.serializer.serialize(), sequence };
+			const data = this.kittyKeyboardSequence + this.serializer.serialize() + this.mouseEncodingSequence;
+			return { data, sequence };
 		}
 	}
 
